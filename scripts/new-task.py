@@ -6,6 +6,7 @@ import os
 import re
 import argparse
 import unicodedata
+import subprocess
 
 AMMONITE_DIR = Path(__file__).absolute().parent.parent
 TASK_TEMPLATE_PATH = AMMONITE_DIR / "templates" / "task.md"
@@ -40,7 +41,7 @@ def main():
 
     USER_TASKS_DIR.mkdir(parents=True, exist_ok=True)
     write_task(task_path, contents)
-    print(f"New task created at {task_path}")
+    git_commit(task_path, task_name)
 
 
 def parse_args():
@@ -104,6 +105,11 @@ def task_name_to_filename(name: str, replacement: str = "_") -> str:
 def write_task(path: Path, contents: str):
     with open(path, "x") as f:
         f.write(contents)
+
+
+def git_commit(path: Path, task_name: str):
+    subprocess.run(["git", "add", path])
+    subprocess.run(["git", "commit", "--only", path, "-m", f"New task {task_name}"])
 
 
 if __name__ == "__main__":
