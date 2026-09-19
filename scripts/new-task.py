@@ -37,6 +37,8 @@ def main():
             "TASK_LINK": task_link,
         }
     )
+
+    USER_TASKS_DIR.mkdir(parents=True, exist_ok=True)
     write_task(task_path, contents)
     print(f"New task created at {task_path}")
 
