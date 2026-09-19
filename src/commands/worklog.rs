@@ -26,38 +26,54 @@ const ENTRIES: &str = "entries";
 ///
 /// Fails when the repository root cannot be found, when `--date` is not a
 /// date, when no dossier matches, when the picker is cancelled, or when the
-/// chosen dossier has no `## Worklog` section. Nothing is written unless every
-/// step up to the write succeeds.
+/// chosen dossier has no `## Worklog` section. Nothing is written until the
+/// message is in hand, and a failure between the two writes leaves the entry
+/// already linked, so re-running logs the line exactly once.
 pub fn run(args: &WorklogArgs) -> Result<()> {
     let root = git::toplevel()?;
+    run_in(&root, args, prompt_for_message)
+}
+
+/// The rest of `run`, with the repository root and the prompt handed in, so a
+/// test can drive it without a git checkout or a terminal.
+fn run_in(
+    root: &Path,
+    args: &WorklogArgs,
+    prompt: impl FnOnce() -> Result<String>,
+) -> Result<()> {
     let date = target_date(args.date.as_deref())?;
-    let dossiers = by_recency(read_dossiers(&root)?);
+    let dossiers = by_recency(read_dossiers(root)?);
     let dossier = select(&dossiers, args)?;
     let name = worklog::stem(&dossier);
-    let chosen = relative(&dossier, &root);
+    let chosen = relative(&dossier, root);
 
-    println!("Logging to {name}");
-    let message = prompt_for_message()?;
-
+    // Everything that can fail is done before the prompt, so a dossier that
+    // cannot take a worklog never costs the user the line they typed.
     let contents = fs::read_to_string(&dossier)
         .with_context(|| format!("could not read '{}'", chosen.display()))?;
-
-    let Some(updated) = worklog::append_message(&contents, date, &message) else {
+    if !worklog::has_worklog(&contents) {
         bail!(
             "'{}' has no '## Worklog' section, so there is nowhere to log this",
             chosen.display()
         );
-    };
-    fs::write(&dossier, updated)
-        .with_context(|| format!("could not write '{}'", chosen.display()))?;
+    }
 
     let entry_path = root.join(ENTRIES).join(format!("{date}.md"));
     let entry = entry_contents(&entry_path, date)?;
+    let entry_shown = relative(&entry_path, root);
     let filename = file_name(&dossier);
     let target = format!("../{DOSSIERS}/{filename}");
     let linked = worklog::add_link(&entry, &name, &target);
-    let entry_shown = relative(&entry_path, &root);
 
+    println!("Logging to {name}");
+    let message = prompt()?;
+
+    let updated = worklog::append_message(&contents, date, &message)
+        .with_context(|| format!("'{}' has no '## Worklog' section", chosen.display()))?;
+
+    // The entry is written first on purpose: if the dossier write then fails,
+    // the link is already recorded, so re-running adds the bullet once rather
+    // than twice.
     if let Some(updated) = &linked {
         let entries_dir = root.join(ENTRIES);
         fs::create_dir_all(&entries_dir)
@@ -66,7 +82,10 @@ pub fn run(args: &WorklogArgs) -> Result<()> {
             .with_context(|| format!("could not write '{}'", entry_shown.display()))?;
     }
 
-    commit(&root, &dossier, &entry_path, &name);
+    fs::write(&dossier, updated)
+        .with_context(|| format!("could not write '{}'", chosen.display()))?;
+
+    commit(root, &dossier, &entry_path, &name);
 
     println!("Logged to '{}'", chosen.display());
     if linked.is_some() {
@@ -250,4 +269,205 @@ fn relative<'a>(path: &'a Path, root: &Path) -> &'a Path {
 fn file_name(path: &Path) -> String {
     path.file_name()
         .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use super::*;
+
+    /// The dossier every test logs against.
+    const DOSSIER: &str = "dossiers/0007 - legacy.md";
+
+    /// A scratch repository root that deletes itself afterwards.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        /// An empty root for one test.
+        fn new(name: &str) -> io::Result<Self> {
+            let pid = std::process::id();
+            let path = std::env::temp_dir().join(format!("bureau-{pid}-{name}"));
+            fs::remove_dir_all(&path).ok();
+            fs::create_dir_all(&path)?;
+            Ok(Self(path))
+        }
+
+        /// The root, for handing to `run_in`.
+        fn path(&self) -> &Path {
+            self.0.as_path()
+        }
+
+        /// Write `contents` to a path below the root.
+        fn write(&self, relative: &str, contents: &str) -> io::Result<()> {
+            let path = self.0.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&path, contents)
+        }
+
+        /// Read a path below the root back.
+        fn read(&self, relative: &str) -> io::Result<String> {
+            fs::read_to_string(self.0.join(relative))
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    /// Arguments that select the one scratch dossier, so no picker is needed.
+    fn args(date: &str) -> WorklogArgs {
+        WorklogArgs {
+            filter: Some("legacy".to_owned()),
+            date: Some(date.to_owned()),
+            menu: false,
+        }
+    }
+
+    #[test]
+    fn refuses_a_dossier_without_a_worklog_before_prompting() {
+        let scratch = Scratch::new("no-worklog").unwrap();
+        scratch
+            .write(DOSSIER, "# Legacy\n## Notes\n- nothing\n")
+            .unwrap();
+
+        let prompted = Cell::new(false);
+        let prompt = || {
+            prompted.set(true);
+            Ok("Did some work".to_owned())
+        };
+
+        let error = run_in(scratch.path(), &args("2026-03-23"), prompt).unwrap_err();
+
+        assert!(
+            !prompted.get(),
+            "the message was prompted for before the dossier was checked"
+        );
+        assert!(error.to_string().contains("no '## Worklog' section"));
+        assert_eq!(
+            scratch.read(DOSSIER).unwrap(),
+            "# Legacy\n## Notes\n- nothing\n"
+        );
+    }
+
+    #[test]
+    fn leaves_the_dossier_alone_when_no_entry_can_be_used() {
+        let scratch = Scratch::new("entry-in-the-way").unwrap();
+        scratch.write(DOSSIER, "# Legacy\n## Worklog\n").unwrap();
+        // A file where the entries directory belongs, so no entry can be read
+        // or written.
+        scratch.write("entries", "in the way\n").unwrap();
+
+        let result = run_in(scratch.path(), &args("2026-03-23"), || {
+            Ok("Did some work".to_owned())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            scratch.read(DOSSIER).unwrap(),
+            "# Legacy\n## Worklog\n",
+            "the dossier was written before the entry was dealt with"
+        );
+    }
+
+    #[test]
+    fn logs_a_line_and_links_the_entry() {
+        let scratch = Scratch::new("happy-path").unwrap();
+        scratch.write(DOSSIER, "# Legacy\n## Worklog\n").unwrap();
+
+        run_in(scratch.path(), &args("2026-03-23"), || {
+            Ok("Did some work".to_owned())
+        })
+        .unwrap();
+
+        assert_eq!(
+            scratch.read(DOSSIER).unwrap(),
+            "# Legacy\n## Worklog\n\n### 2026-03-23\n- Did some work\n"
+        );
+        assert_eq!(
+            scratch.read("entries/2026-03-23.md").unwrap(),
+            "# 2026-03-23\n\n## Notes\n- \n\n## Worked on Dossiers\n\
+- [0007 - legacy](<../dossiers/0007 - legacy.md>)\n"
+        );
+    }
+
+    #[test]
+    fn running_twice_logs_the_line_twice_but_links_the_entry_once() {
+        let scratch = Scratch::new("twice").unwrap();
+        scratch.write(DOSSIER, "# Legacy\n## Worklog\n").unwrap();
+
+        run_in(scratch.path(), &args("2026-03-23"), || {
+            Ok("First".to_owned())
+        })
+        .unwrap();
+        run_in(scratch.path(), &args("2026-03-23"), || {
+            Ok("Second".to_owned())
+        })
+        .unwrap();
+
+        assert_eq!(
+            scratch.read(DOSSIER).unwrap(),
+            "# Legacy\n## Worklog\n\n### 2026-03-23\n- First\n- Second\n"
+        );
+        assert_eq!(
+            scratch
+                .read("entries/2026-03-23.md")
+                .unwrap()
+                .matches("- [0007 - legacy]")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_failed_dossier_write_still_leaves_the_entry_linked() {
+        let scratch = Scratch::new("dossier-write-fails").unwrap();
+        scratch.write(DOSSIER, "# Legacy\n## Worklog\n").unwrap();
+
+        // The prompt runs after both files have been read and before either is
+        // written, so this is the one moment a test can break the dossier write
+        // without depending on file permissions.
+        let dossier_path = scratch.path().join(DOSSIER);
+        let in_the_way = dossier_path.clone();
+        let prompt = move || {
+            fs::remove_file(&in_the_way)?;
+            fs::create_dir(&in_the_way)?;
+            Ok("Did some work".to_owned())
+        };
+
+        assert!(run_in(scratch.path(), &args("2026-03-23"), prompt).is_err());
+        assert!(
+            scratch
+                .read("entries/2026-03-23.md")
+                .unwrap()
+                .contains("- [0007 - legacy]"),
+            "the entry should have been written before the dossier"
+        );
+
+        // Put the dossier back and log the same line again: the entry is
+        // already linked, so the bullet is added exactly once.
+        fs::remove_dir(&dossier_path).unwrap();
+        fs::write(&dossier_path, "# Legacy\n## Worklog\n").unwrap();
+        run_in(scratch.path(), &args("2026-03-23"), || {
+            Ok("Did some work".to_owned())
+        })
+        .unwrap();
+
+        assert_eq!(
+            scratch.read(DOSSIER).unwrap(),
+            "# Legacy\n## Worklog\n\n### 2026-03-23\n- Did some work\n"
+        );
+        assert_eq!(
+            scratch
+                .read("entries/2026-03-23.md")
+                .unwrap()
+                .matches("- [0007 - legacy]")
+                .count(),
+            1
+        );
+    }
 }

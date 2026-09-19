@@ -35,6 +35,12 @@ pub fn matching(dossiers: &[PathBuf], filter: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Whether `content` has a `## Worklog` section to add to.
+#[must_use]
+pub fn has_worklog(content: &str) -> bool {
+    section(&to_lines(content), WORKLOG_HEADING).is_some()
+}
+
 /// Add `message` to the worklog in `content`, under `date`.
 ///
 /// Returns `None` when there is no `## Worklog` section to add it to. A day
@@ -65,10 +71,7 @@ pub fn append_message(content: &str, date: NaiveDate, message: &str) -> Option<S
     // after the heading when the day has none yet.
     let start = after(day);
     let day_end = sub_section_end(&lines, start, end);
-    let last_bullet = lines
-        .get(start..day_end)
-        .and_then(|rest| rest.iter().rposition(|line| line.trim_start().starts_with("- ")));
-    let position = last_bullet.map_or(start, |offset| after(start.saturating_add(offset)));
+    let position = after_last_bullet(&lines, start, day_end);
 
     Some(splice(&lines, position, &[bullet]))
 }
@@ -92,15 +95,16 @@ pub fn add_link(content: &str, label: &str, target: &str) -> Option<String> {
         return Some(splice(&lines, lines.len(), &block));
     };
 
-    let linked = lines
-        .get(after(heading)..end)
+    let start = after(heading);
+    let section_lines = lines.get(start..end);
+    let linked = section_lines
         .is_some_and(|rest| rest.iter().any(|line| line.trim_end() == link.trim_end()));
 
     if linked {
         return None;
     }
 
-    Some(splice(&lines, end, &[link]))
+    Some(splice(&lines, after_last_bullet(&lines, start, end), &[link]))
 }
 
 /// The content split into lines, each keeping its own line ending.
@@ -197,6 +201,11 @@ fn splice(lines: &[String], position: usize, block: &[String]) -> String {
     }
 
     if position >= lines.len() {
+        // A file does not have to end with a newline, and `to_lines` preserves
+        // that, so make sure the block cannot be glued onto the last line.
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
         push_all(&mut output, block);
     }
 
@@ -208,6 +217,15 @@ fn push_all(output: &mut String, block: &[String]) {
     for line in block {
         output.push_str(line);
     }
+}
+
+/// Where a new bullet belongs in `first..end`: after the last one already
+/// there, or straight after the first line when there is none.
+fn after_last_bullet(lines: &[String], first: usize, end: usize) -> usize {
+    lines
+        .get(first..end)
+        .and_then(|rest| rest.iter().rposition(|line| line.trim_start().starts_with("- ")))
+        .map_or(first, |offset| after(first.saturating_add(offset)))
 }
 
 /// One past `index`, spelled out because this crate denies bare arithmetic.
@@ -411,6 +429,60 @@ Words.
         let content = "# 2026-03-23\n\n## Notes\n- \n";
         let expected =
             "# 2026-03-23\n\n## Notes\n- \n\n## Worked on Dossiers\n- [a](<../dossiers/a.md>)\n";
+
+        assert_eq!(add_link(content, "a", "../dossiers/a.md").unwrap(), expected);
+    }
+
+    #[test]
+    fn spots_a_missing_worklog_section() {
+        assert!(has_worklog("# Fix a thing\n## Worklog\n"));
+        assert!(!has_worklog("# Fix a thing\n## Notes\n"));
+    }
+
+    #[test]
+    fn adds_a_newline_when_the_worklog_does_not_end_with_one() {
+        let content = "## Worklog\n### 2024-02-12\n- Did something";
+        let expected = "## Worklog\n### 2024-02-12\n- Did something\n- More work\n";
+
+        assert_eq!(
+            append_message(content, date(2024, 2, 12), "More work").unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn links_when_the_entry_does_not_end_with_a_newline() {
+        let content = "# 2026-03-23\n\n## Worked on Dossiers";
+        let expected = "# 2026-03-23\n\n## Worked on Dossiers\n- [a](<../dossiers/a.md>)\n";
+
+        assert_eq!(add_link(content, "a", "../dossiers/a.md").unwrap(), expected);
+    }
+
+    #[test]
+    fn keeps_the_links_together_when_another_section_follows() {
+        let content = "\
+## Worked on Dossiers
+- [a](<../dossiers/a.md>)
+
+## Notes
+- A note
+";
+        let expected = "\
+## Worked on Dossiers
+- [a](<../dossiers/a.md>)
+- [b](<../dossiers/b.md>)
+
+## Notes
+- A note
+";
+
+        assert_eq!(add_link(content, "b", "../dossiers/b.md").unwrap(), expected);
+    }
+
+    #[test]
+    fn links_directly_under_an_empty_section() {
+        let content = "## Worked on Dossiers\n\n## Notes\n";
+        let expected = "## Worked on Dossiers\n- [a](<../dossiers/a.md>)\n\n## Notes\n";
 
         assert_eq!(add_link(content, "a", "../dossiers/a.md").unwrap(), expected);
     }
