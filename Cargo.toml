@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = { version = "1.0.104", default-features = false, features = ["std"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 clap = { version = "4.6.6", default-features = false, features = ["std", "color", "error-context", "help", "suggestions", "usage", "wrap_help", "derive"] }
+dialoguer = { version = "0.12.0", default-features = false, features = ["fuzzy-select"] }
 sanitise-file-name = { version = "1.0.0", default-features = false, features = ["std"] }
 
 # Originally copied from https://www.namtao.com/rust/, thanks to No Boilerplate

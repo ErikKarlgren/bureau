@@ -1,6 +1,7 @@
 //! Subcommand implementations.
 
 mod new;
+mod worklog;
 
 use crate::cli::{Command, NewCommand};
 use crate::Result;
@@ -16,5 +17,6 @@ pub fn run(command: Command) -> Result<()> {
             NewCommand::Dossier(args) => new::dossier(&args),
             NewCommand::Entry => new::entry(),
         },
+        Command::Worklog(args) => worklog::run(&args),
     }
 }

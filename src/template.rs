@@ -1,5 +1,7 @@
 //! The Markdown templates, embedded in the binary at compile time.
 
+use std::fmt;
+
 /// The skeleton of a new dossier.
 pub const DOSSIER: &str = include_str!("../templates/dossier.md");
 
@@ -42,6 +44,13 @@ pub fn render(template: &str, values: &[(&str, &str)]) -> String {
     }
 
     rendered
+}
+
+/// The contents of a new daily entry for `date`.
+#[must_use]
+pub fn daily_entry(date: &impl fmt::Display) -> String {
+    let date = date.to_string();
+    render(DAILY_ENTRY, &[("DATE", date.as_str())])
 }
 
 #[cfg(test)]

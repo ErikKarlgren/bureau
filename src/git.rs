@@ -28,16 +28,16 @@ pub fn toplevel() -> Result<PathBuf> {
     Ok(PathBuf::from(path.trim_end()))
 }
 
-/// Stage and commit one file, leaving any other staged changes alone.
+/// Stage and commit the given files, leaving any other staged changes alone.
 ///
 /// # Errors
 ///
 /// Fails when `git add` or `git commit` exits with an error. The message
 /// carries git's own explanation.
-pub fn commit(path: &Path, message: &str) -> Result<()> {
+pub fn commit(paths: &[&Path], message: &str) -> Result<()> {
     let added = Command::new("git")
         .arg("add")
-        .arg(path)
+        .args(paths)
         .output()
         .context("could not run git")?;
     if !added.status.success() {
@@ -45,9 +45,8 @@ pub fn commit(path: &Path, message: &str) -> Result<()> {
     }
 
     let committed = Command::new("git")
-        .args(["commit", "--only"])
-        .arg(path)
-        .args(["-m", message])
+        .args(["commit", "--only", "-m", message])
+        .args(paths)
         .output()
         .context("could not run git")?;
     if !committed.status.success() {

@@ -60,7 +60,7 @@ pub fn entry() -> Result<()> {
         bail!("an entry already exists at path '{}'", path.display());
     }
 
-    let contents = template::render(template::DAILY_ENTRY, &[("DATE", date.as_str())]);
+    let contents = template::daily_entry(&date);
 
     write_and_commit(&path, &contents, "entry", &format!("New entry {date}"))
 }
@@ -77,7 +77,7 @@ fn write_and_commit(path: &Path, contents: &str, kind: &str, message: &str) -> R
     fs::write(path, contents)
         .with_context(|| format!("could not write '{}'", path.display()))?;
 
-    if let Err(error) = git::commit(path, message) {
+    if let Err(error) = git::commit(&[path], message) {
         eprintln!("warning: {error:?}");
         eprintln!(
             "warning: the {kind} was created at '{}' but is not committed",

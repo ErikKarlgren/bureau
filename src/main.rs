@@ -5,6 +5,7 @@ mod commands;
 mod dossier;
 mod git;
 mod template;
+mod worklog;
 
 use clap::Parser;
 
