@@ -1,7 +1,8 @@
-//! `bureau new dossier`.
+//! `bureau new dossier` and `bureau new entry`.
 
 use std::fs;
 use std::io::{self, BufRead, Write};
+use std::path::Path;
 
 use anyhow::{Context, bail};
 use chrono::Local;
@@ -41,17 +42,45 @@ pub fn dossier(args: &DossierArgs) -> Result<()> {
         ],
     );
 
-    fs::create_dir_all(&dossiers_dir)
-        .with_context(|| format!("could not create '{}'", dossiers_dir.display()))?;
-    fs::write(&path, contents)
+    write_and_commit(&path, &contents, "dossier", &format!("New dossier {name}"))
+}
+
+/// Create today's daily entry, then commit it.
+///
+/// # Errors
+///
+/// Fails when the current directory is not in a git repository, when today's
+/// entry already exists, or when the entry cannot be written.
+pub fn entry() -> Result<()> {
+    let date = Local::now().format("%Y-%m-%d").to_string();
+    let entries_dir = git::toplevel()?.join("entries");
+    let path = entries_dir.join(format!("{date}.md"));
+
+    if path.exists() {
+        bail!("an entry already exists at path '{}'", path.display());
+    }
+
+    let contents = template::render(template::DAILY_ENTRY, &[("DATE", date.as_str())]);
+
+    write_and_commit(&path, &contents, "entry", &format!("New entry {date}"))
+}
+
+/// Write a new file, creating its directory, then commit it.
+///
+/// A git failure is only a warning: the file on disk is useful either way.
+fn write_and_commit(path: &Path, contents: &str, kind: &str, message: &str) -> Result<()> {
+    if let Some(directory) = path.parent() {
+        fs::create_dir_all(directory)
+            .with_context(|| format!("could not create '{}'", directory.display()))?;
+    }
+
+    fs::write(path, contents)
         .with_context(|| format!("could not write '{}'", path.display()))?;
 
-    // The dossier is on disk and useful either way, so a git failure is a
-    // warning rather than an error. `{:?}` prints the whole cause chain.
-    if let Err(error) = git::commit(&path, &format!("New dossier {name}")) {
+    if let Err(error) = git::commit(path, message) {
         eprintln!("warning: {error:?}");
         eprintln!(
-            "warning: the dossier was created at '{}' but is not committed",
+            "warning: the {kind} was created at '{}' but is not committed",
             path.display()
         );
     }

@@ -14,6 +14,7 @@ pub fn run(command: Command) -> Result<()> {
     match command {
         Command::New { command: subcommand } => match subcommand {
             NewCommand::Dossier(args) => new::dossier(&args),
+            NewCommand::Entry => new::entry(),
         },
     }
 }

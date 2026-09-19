@@ -25,6 +25,8 @@ pub enum Command {
 pub enum NewCommand {
     /// Create a new dossier and commit it.
     Dossier(DossierArgs),
+    /// Create today's daily entry and commit it.
+    Entry,
 }
 
 /// Arguments for `bureau new dossier`.

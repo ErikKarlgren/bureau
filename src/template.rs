@@ -3,6 +3,9 @@
 /// The skeleton of a new dossier.
 pub const DOSSIER: &str = include_str!("../templates/dossier.md");
 
+/// The skeleton of a new daily entry.
+pub const DAILY_ENTRY: &str = include_str!("../templates/daily-entry.md");
+
 /// Fill in a template's `$NAME` placeholders.
 ///
 /// Substitution is a single pass, so a value that itself looks like a
@@ -72,6 +75,12 @@ mod tests {
                 ("DOSSIER_LINK", "link\n"),
             ],
         );
+        assert!(!rendered.contains('$'), "left a placeholder in: {rendered}");
+    }
+
+    #[test]
+    fn daily_entry_template_only_uses_known_placeholders() {
+        let rendered = render(DAILY_ENTRY, &[("DATE", "2026-03-23")]);
         assert!(!rendered.contains('$'), "left a placeholder in: {rendered}");
     }
 }
