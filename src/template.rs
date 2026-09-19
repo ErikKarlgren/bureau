@@ -33,12 +33,11 @@ pub fn render(template: &str, values: &[(&str, &str)]) -> String {
             }
         }
 
-        match values.iter().find(|(key, _)| *key == name.as_str()) {
-            Some((_, value)) => rendered.push_str(value),
-            None => {
-                rendered.push('$');
-                rendered.push_str(&name);
-            }
+        if let Some((_, value)) = values.iter().find(|(key, _)| *key == name.as_str()) {
+            rendered.push_str(value);
+        } else {
+            rendered.push('$');
+            rendered.push_str(&name);
         }
     }
 
@@ -62,6 +61,12 @@ mod tests {
     fn does_not_expand_placeholders_inside_values() {
         let rendered = render("$A", &[("A", "$B"), ("B", "expanded")]);
         assert_eq!(rendered, "$B");
+    }
+
+    #[test]
+    fn keeps_non_recognized_placeholders() {
+        let rendered = render("$A $B", &[("A", "aaa")]);
+        assert_eq!(rendered, "aaa $B");
     }
 
     #[test]
