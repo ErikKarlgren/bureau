@@ -1,6 +1,6 @@
 # $DOSSIER_NAME
 - Creation date: $CREATION_DATE
-$TASK_LINK
+$DOSSIER_LINK
 ## Affected Systems
 - 
 
