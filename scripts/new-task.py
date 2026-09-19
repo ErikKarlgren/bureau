@@ -97,7 +97,8 @@ def task_name_to_filename(name: str, replacement: str = "_") -> str:
         name = f"_{name}"
 
     # Avoid an empty result
-    return name or "unnamed"
+    name = name or "unnamed"
+    return f"{name}.md"
 
 
 def write_task(path: Path, contents: str):
