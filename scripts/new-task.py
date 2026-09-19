@@ -7,7 +7,7 @@ import re
 import argparse
 import unicodedata
 
-AMMONITE_DIR = Path(__file__).resolve().parent.parent
+AMMONITE_DIR = Path(__file__).absolute().parent.parent
 TASK_TEMPLATE_PATH = AMMONITE_DIR / "templates" / "task.md"
 USER_DIR = AMMONITE_DIR.parent
 USER_TASKS_DIR = USER_DIR / "tasks"
