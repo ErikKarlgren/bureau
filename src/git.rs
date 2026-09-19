@@ -23,8 +23,7 @@ pub fn toplevel() -> Result<PathBuf> {
         bail!("not inside a git repository: {}", stderr(&output));
     }
 
-    let path =
-        String::from_utf8(output.stdout).context("git returned a path that is not UTF-8")?;
+    let path = String::from_utf8(output.stdout).context("git returned a path that is not UTF-8")?;
     Ok(PathBuf::from(path.trim_end()))
 }
 

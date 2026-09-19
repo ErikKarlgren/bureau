@@ -7,11 +7,11 @@ use std::path::Path;
 use anyhow::{Context, bail};
 use chrono::Local;
 
+use crate::Result;
 use crate::cli::DossierArgs;
 use crate::dossier;
 use crate::git;
 use crate::template;
-use crate::Result;
 
 /// Create a dossier named after the arguments, then commit it.
 ///
@@ -74,8 +74,7 @@ fn write_and_commit(path: &Path, contents: &str, kind: &str, message: &str) -> R
             .with_context(|| format!("could not create '{}'", directory.display()))?;
     }
 
-    fs::write(path, contents)
-        .with_context(|| format!("could not write '{}'", path.display()))?;
+    fs::write(path, contents).with_context(|| format!("could not write '{}'", path.display()))?;
 
     if let Err(error) = git::commit(&[path], message) {
         eprintln!("warning: {error:?}");

@@ -10,11 +10,11 @@ use anyhow::{Context, bail};
 use chrono::{Local, NaiveDate};
 use dialoguer::FuzzySelect;
 
+use crate::Result;
 use crate::cli::WorklogArgs;
 use crate::git;
 use crate::template;
 use crate::worklog;
-use crate::Result;
 
 /// The directories, inside the repository, that bureau reads and writes.
 const DOSSIERS: &str = "dossiers";
@@ -36,11 +36,7 @@ pub fn run(args: &WorklogArgs) -> Result<()> {
 
 /// The rest of `run`, with the repository root and the prompt handed in, so a
 /// test can drive it without a git checkout or a terminal.
-fn run_in(
-    root: &Path,
-    args: &WorklogArgs,
-    prompt: impl FnOnce() -> Result<String>,
-) -> Result<()> {
+fn run_in(root: &Path, args: &WorklogArgs, prompt: impl FnOnce() -> Result<String>) -> Result<()> {
     let date = target_date(args.date.as_deref())?;
     let dossiers = by_recency(read_dossiers(root)?);
     let dossier = select(&dossiers, args)?;
@@ -206,8 +202,7 @@ fn read_dossiers(root: &Path) -> Result<Vec<PathBuf>> {
 
 /// Dossiers sorted most recently modified first, by name within equal times.
 fn by_recency(mut dossiers: Vec<PathBuf>) -> Vec<PathBuf> {
-    dossiers
-        .sort_by_cached_key(|dossier| (Reverse(modified(dossier.as_path())), dossier.clone()));
+    dossiers.sort_by_cached_key(|dossier| (Reverse(modified(dossier.as_path())), dossier.clone()));
 
     dossiers
 }
