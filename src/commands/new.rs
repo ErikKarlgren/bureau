@@ -3,6 +3,7 @@
 use std::fs;
 use std::io::{self, BufRead, Write};
 
+use anyhow::{Context, bail};
 use chrono::Local;
 
 use crate::cli::DossierArgs;
@@ -23,7 +24,7 @@ pub fn dossier(args: &DossierArgs) -> Result<()> {
     let path = dossiers_dir.join(dossier::name_to_filename(&name));
 
     if path.exists() {
-        return Err(format!("a dossier already exists at path '{}'", path.display()).into());
+        bail!("a dossier already exists at path '{}'", path.display());
     }
 
     let creation_date = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -40,13 +41,15 @@ pub fn dossier(args: &DossierArgs) -> Result<()> {
         ],
     );
 
-    fs::create_dir_all(&dossiers_dir)?;
-    fs::write(&path, contents)?;
+    fs::create_dir_all(&dossiers_dir)
+        .with_context(|| format!("could not create '{}'", dossiers_dir.display()))?;
+    fs::write(&path, contents)
+        .with_context(|| format!("could not write '{}'", path.display()))?;
 
     // The dossier is on disk and useful either way, so a git failure is a
-    // warning rather than an error.
+    // warning rather than an error. `{:?}` prints the whole cause chain.
     if let Err(error) = git::commit(&path, &format!("New dossier {name}")) {
-        eprintln!("warning: {error}");
+        eprintln!("warning: {error:?}");
         eprintln!(
             "warning: the dossier was created at '{}' but is not committed",
             path.display()

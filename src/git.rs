@@ -3,6 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use anyhow::{Context, bail};
+
 use crate::Result;
 
 /// The root of the repository bureau was run from.
@@ -14,13 +16,15 @@ use crate::Result;
 pub fn toplevel() -> Result<PathBuf> {
     let output = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
-        .output()?;
+        .output()
+        .context("could not run git")?;
 
     if !output.status.success() {
-        return Err(format!("not inside a git repository: {}", stderr(&output)).into());
+        bail!("not inside a git repository: {}", stderr(&output));
     }
 
-    let path = String::from_utf8(output.stdout)?;
+    let path =
+        String::from_utf8(output.stdout).context("git returned a path that is not UTF-8")?;
     Ok(PathBuf::from(path.trim_end()))
 }
 
@@ -31,18 +35,23 @@ pub fn toplevel() -> Result<PathBuf> {
 /// Fails when `git add` or `git commit` exits with an error. The message
 /// carries git's own explanation.
 pub fn commit(path: &Path, message: &str) -> Result<()> {
-    let added = Command::new("git").arg("add").arg(path).output()?;
+    let added = Command::new("git")
+        .arg("add")
+        .arg(path)
+        .output()
+        .context("could not run git")?;
     if !added.status.success() {
-        return Err(format!("git add failed: {}", stderr(&added)).into());
+        bail!("git add failed: {}", stderr(&added));
     }
 
     let committed = Command::new("git")
         .args(["commit", "--only"])
         .arg(path)
         .args(["-m", message])
-        .output()?;
+        .output()
+        .context("could not run git")?;
     if !committed.status.success() {
-        return Err(format!("git commit failed: {}", stderr(&committed)).into());
+        bail!("git commit failed: {}", stderr(&committed));
     }
 
     Ok(())
