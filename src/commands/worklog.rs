@@ -62,13 +62,14 @@ fn run_in(
     let entry = entry_contents(&entry_path, date)?;
     let entry_shown = relative(&entry_path, root);
     let filename = file_name(&dossier);
-    let target = format!("../{DOSSIERS}/{filename}");
-    let linked = worklog::add_link(&entry, &name, &target);
+    let dossier_link = format!("../{DOSSIERS}/{filename}");
+    let linked = worklog::add_link(&entry, &name, &dossier_link);
 
     println!("Logging to {name}");
     let message = prompt()?;
 
-    let updated = worklog::append_message(&contents, date, &message)
+    let entry_link = format!("../{ENTRIES}/{date}.md");
+    let updated = worklog::append_message(&contents, date, &message, &entry_link)
         .with_context(|| format!("'{}' has no '## Worklog' section", chosen.display()))?;
 
     // The entry is written first on purpose: if the dossier write then fails,
@@ -386,7 +387,7 @@ mod tests {
 
         assert_eq!(
             scratch.read(DOSSIER).unwrap(),
-            "# Legacy\n## Worklog\n\n### 2026-03-23\n- Did some work\n"
+            "# Legacy\n## Worklog\n\n### [2026-03-23](<../entries/2026-03-23.md>)\n- Did some work\n"
         );
         assert_eq!(
             scratch.read("entries/2026-03-23.md").unwrap(),
@@ -411,7 +412,7 @@ mod tests {
 
         assert_eq!(
             scratch.read(DOSSIER).unwrap(),
-            "# Legacy\n## Worklog\n\n### 2026-03-23\n- First\n- Second\n"
+            "# Legacy\n## Worklog\n\n### [2026-03-23](<../entries/2026-03-23.md>)\n- First\n- Second\n"
         );
         assert_eq!(
             scratch
@@ -459,7 +460,7 @@ mod tests {
 
         assert_eq!(
             scratch.read(DOSSIER).unwrap(),
-            "# Legacy\n## Worklog\n\n### 2026-03-23\n- Did some work\n"
+            "# Legacy\n## Worklog\n\n### [2026-03-23](<../entries/2026-03-23.md>)\n- Did some work\n"
         );
         assert_eq!(
             scratch

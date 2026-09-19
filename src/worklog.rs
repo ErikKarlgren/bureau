@@ -45,13 +45,21 @@ pub fn has_worklog(content: &str) -> bool {
 ///
 /// Returns `None` when there is no `## Worklog` section to add it to. A day
 /// that already has a heading gains another bullet; a new day is inserted so
-/// that the `###` headings stay in date order.
+/// that the `###` headings stay in date order. Each day heading links to that
+/// day's entry at `entry_link`, and a bare heading left by an older version is
+/// given its link the next time the day is logged.
 #[must_use]
-pub fn append_message(content: &str, date: NaiveDate, message: &str) -> Option<String> {
-    let lines = to_lines(content);
+pub fn append_message(
+    content: &str,
+    date: NaiveDate,
+    message: &str,
+    entry_link: &str,
+) -> Option<String> {
+    let mut lines = to_lines(content);
     let (heading, end) = section(&lines, WORKLOG_HEADING)?;
     let first = after(heading);
     let bullet = format!("- {message}\n");
+    let heading_line = day_heading_line(date, entry_link);
 
     let Some(day) = day_heading(&lines, first, end, date) else {
         let position = insertion_point(&lines, first, end, date);
@@ -59,13 +67,15 @@ pub fn append_message(content: &str, date: NaiveDate, message: &str) -> Option<S
         if needs_blank_before(&lines, position) {
             block.push(String::from("\n"));
         }
-        block.push(format!("### {date}\n"));
+        block.push(heading_line);
         block.push(bullet);
         if needs_blank_after(&lines, position) {
             block.push(String::from("\n"));
         }
         return Some(splice(&lines, position, &block));
     };
+
+    link_day_heading(&mut lines, day, &heading_line);
 
     // The new bullet goes after the last bullet of that day only, or straight
     // after the heading when the day has none yet.
@@ -104,7 +114,11 @@ pub fn add_link(content: &str, label: &str, target: &str) -> Option<String> {
         return None;
     }
 
-    Some(splice(&lines, after_last_bullet(&lines, start, end), &[link]))
+    Some(splice(
+        &lines,
+        after_last_bullet(&lines, start, end),
+        &[link],
+    ))
 }
 
 /// The content split into lines, each keeping its own line ending.
@@ -147,10 +161,45 @@ fn sub_section_end(lines: &[String], first: usize, end: usize) -> usize {
         .map_or(end, |offset| first.saturating_add(offset))
 }
 
-/// The date of a `### YYYY-MM-DD` line, when that is what the line is.
+/// The date of a `### 2026-09-19` or `### [2026-09-19](<…>)` line, when that is
+/// what the line is.
 fn heading_date(line: &str) -> Option<NaiveDate> {
     let text = line.trim_end().strip_prefix("### ")?;
-    NaiveDate::parse_from_str(text, DATE_FORMAT).ok()
+    let date = link_label(text).unwrap_or(text);
+    NaiveDate::parse_from_str(date, DATE_FORMAT).ok()
+}
+
+/// The heading a day gets: a link back to that day's daily entry.
+fn day_heading_line(date: NaiveDate, entry_link: &str) -> String {
+    format!("### [{date}](<{entry_link}>)\n")
+}
+
+/// Give a bare `### date` heading its link, leaving a heading that already has
+/// one exactly as it is.
+fn link_day_heading(lines: &mut [String], index: usize, heading: &str) {
+    let Some(line) = lines.get_mut(index) else {
+        return;
+    };
+
+    if is_bare_day_heading(line.as_str()) {
+        heading.clone_into(line);
+    }
+}
+
+/// Whether a day heading is missing its link, as in `### 2026-09-19`.
+fn is_bare_day_heading(line: &str) -> bool {
+    let Some(text) = line.trim_end().strip_prefix("### ") else {
+        return false;
+    };
+
+    link_label(text).is_none() && NaiveDate::parse_from_str(text, DATE_FORMAT).is_ok()
+}
+
+/// The label of a `[label](target)` heading, when that is what it is.
+fn link_label(text: &str) -> Option<&str> {
+    text.strip_prefix('[')?
+        .split_once(']')
+        .map(|(label, _)| label)
 }
 
 /// The line of the `### date` heading within `first..end`.
@@ -224,7 +273,10 @@ fn push_all(output: &mut String, block: &[String]) {
 fn after_last_bullet(lines: &[String], first: usize, end: usize) -> usize {
     lines
         .get(first..end)
-        .and_then(|rest| rest.iter().rposition(|line| line.trim_start().starts_with("- ")))
+        .and_then(|rest| {
+            rest.iter()
+                .rposition(|line| line.trim_start().starts_with("- "))
+        })
         .map_or(first, |offset| after(first.saturating_add(offset)))
 }
 
@@ -243,6 +295,16 @@ mod tests {
 
     fn dossier(name: &str) -> PathBuf {
         PathBuf::from(name)
+    }
+
+    /// The link a dossier's day heading uses for `day`.
+    fn entry_link(day: NaiveDate) -> String {
+        format!("../entries/{day}.md")
+    }
+
+    /// `append_message` with the link a dossier would use.
+    fn append(content: &str, day: NaiveDate, message: &str) -> Option<String> {
+        append_message(content, day, message, &entry_link(day))
     }
 
     #[test]
@@ -296,7 +358,7 @@ mod tests {
         let expected = "\
 # Fix a thing
 ## Worklog
-### 2024-02-12
+### [2024-02-12](<../entries/2024-02-12.md>)
 - Did something
 - More work
 
@@ -305,7 +367,7 @@ mod tests {
 ";
 
         assert_eq!(
-            append_message(content, date(2024, 2, 12), "More work").unwrap(),
+            append(content, date(2024, 2, 12), "More work").unwrap(),
             expected
         );
     }
@@ -317,7 +379,7 @@ mod tests {
 ### 2024-02-12
 - First
 
-### 2024-02-20
+### [2024-02-20](<../entries/2024-02-20.md>)
 - Last
 ";
         let expected = "\
@@ -325,15 +387,15 @@ mod tests {
 ### 2024-02-12
 - First
 
-### 2024-02-16
+### [2024-02-16](<../entries/2024-02-16.md>)
 - Middle
 
-### 2024-02-20
+### [2024-02-20](<../entries/2024-02-20.md>)
 - Last
 ";
 
         assert_eq!(
-            append_message(content, date(2024, 2, 16), "Middle").unwrap(),
+            append(content, date(2024, 2, 16), "Middle").unwrap(),
             expected
         );
     }
@@ -341,21 +403,18 @@ mod tests {
     #[test]
     fn appends_a_new_day_at_the_end_of_the_section() {
         let content = "## Worklog\n### 2024-02-12\n- First\n";
-        let expected = "## Worklog\n### 2024-02-12\n- First\n\n### 2024-02-14\n- New\n";
+        let expected = "## Worklog\n### 2024-02-12\n- First\n\n### [2024-02-14](<../entries/2024-02-14.md>)\n- New\n";
 
-        assert_eq!(
-            append_message(content, date(2024, 2, 14), "New").unwrap(),
-            expected
-        );
+        assert_eq!(append(content, date(2024, 2, 14), "New").unwrap(), expected);
     }
 
     #[test]
     fn starts_the_worklog_when_it_is_empty() {
         let content = "# Fix a thing\n## Worklog\n";
-        let expected = "# Fix a thing\n## Worklog\n\n### 2024-02-13\n- First entry\n";
+        let expected = "# Fix a thing\n## Worklog\n\n### [2024-02-13](<../entries/2024-02-13.md>)\n- First entry\n";
 
         assert_eq!(
-            append_message(content, date(2024, 2, 13), "First entry").unwrap(),
+            append(content, date(2024, 2, 13), "First entry").unwrap(),
             expected
         );
     }
@@ -380,7 +439,7 @@ Words.
 Words.
 
 ## Worklog
-### 2024-02-12
+### [2024-02-12](<../entries/2024-02-12.md>)
 - Did something
 - More
 
@@ -389,7 +448,7 @@ Words.
 ";
 
         assert_eq!(
-            append_message(content, date(2024, 2, 12), "More").unwrap(),
+            append(content, date(2024, 2, 12), "More").unwrap(),
             expected
         );
     }
@@ -398,7 +457,7 @@ Words.
     fn a_dossier_without_a_worklog_is_reported() {
         let content = "# Fix a thing\n## Notes\n- nothing\n";
 
-        assert!(append_message(content, date(2024, 2, 13), "Work").is_none());
+        assert!(append(content, date(2024, 2, 13), "Work").is_none());
     }
 
     #[test]
@@ -430,7 +489,10 @@ Words.
         let expected =
             "# 2026-03-23\n\n## Notes\n- \n\n## Worked on Dossiers\n- [a](<../dossiers/a.md>)\n";
 
-        assert_eq!(add_link(content, "a", "../dossiers/a.md").unwrap(), expected);
+        assert_eq!(
+            add_link(content, "a", "../dossiers/a.md").unwrap(),
+            expected
+        );
     }
 
     #[test]
@@ -442,10 +504,10 @@ Words.
     #[test]
     fn adds_a_newline_when_the_worklog_does_not_end_with_one() {
         let content = "## Worklog\n### 2024-02-12\n- Did something";
-        let expected = "## Worklog\n### 2024-02-12\n- Did something\n- More work\n";
+        let expected = "## Worklog\n### [2024-02-12](<../entries/2024-02-12.md>)\n- Did something\n- More work\n";
 
         assert_eq!(
-            append_message(content, date(2024, 2, 12), "More work").unwrap(),
+            append(content, date(2024, 2, 12), "More work").unwrap(),
             expected
         );
     }
@@ -455,7 +517,10 @@ Words.
         let content = "# 2026-03-23\n\n## Worked on Dossiers";
         let expected = "# 2026-03-23\n\n## Worked on Dossiers\n- [a](<../dossiers/a.md>)\n";
 
-        assert_eq!(add_link(content, "a", "../dossiers/a.md").unwrap(), expected);
+        assert_eq!(
+            add_link(content, "a", "../dossiers/a.md").unwrap(),
+            expected
+        );
     }
 
     #[test]
@@ -476,7 +541,10 @@ Words.
 - A note
 ";
 
-        assert_eq!(add_link(content, "b", "../dossiers/b.md").unwrap(), expected);
+        assert_eq!(
+            add_link(content, "b", "../dossiers/b.md").unwrap(),
+            expected
+        );
     }
 
     #[test]
@@ -484,6 +552,53 @@ Words.
         let content = "## Worked on Dossiers\n\n## Notes\n";
         let expected = "## Worked on Dossiers\n- [a](<../dossiers/a.md>)\n\n## Notes\n";
 
-        assert_eq!(add_link(content, "a", "../dossiers/a.md").unwrap(), expected);
+        assert_eq!(
+            add_link(content, "a", "../dossiers/a.md").unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn reads_dates_from_bare_and_linked_headings() {
+        assert_eq!(heading_date("### 2026-09-19\n"), Some(date(2026, 9, 19)));
+        assert_eq!(
+            heading_date("### [2026-09-19](<../entries/2026-09-19.md>)\n"),
+            Some(date(2026, 9, 19))
+        );
+        assert_eq!(heading_date("### Notes\n"), None);
+    }
+
+    #[test]
+    fn a_bare_day_heading_gains_its_link_when_the_day_is_logged_again() {
+        let content = "## Worklog\n### 2026-09-19\n- killed 3 goblins\n";
+        let expected = "## Worklog\n### [2026-09-19](<../entries/2026-09-19.md>)\n- killed 3 goblins\n- killed 4 goblins\n";
+
+        assert_eq!(
+            append(content, date(2026, 9, 19), "killed 4 goblins").unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn appends_under_a_linked_day_heading_without_adding_another() {
+        let content =
+            "## Worklog\n### [2026-09-19](<../entries/2026-09-19.md>)\n- killed 3 goblins\n";
+        let expected = "## Worklog\n### [2026-09-19](<../entries/2026-09-19.md>)\n- killed 3 goblins\n- killed 4 goblins\n";
+
+        assert_eq!(
+            append(content, date(2026, 9, 19), "killed 4 goblins").unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn leaves_a_hand_written_day_link_alone() {
+        let content = "## Worklog\n### [2026-09-19](<elsewhere.md>)\n- killed 3 goblins\n";
+        let expected = "## Worklog\n### [2026-09-19](<elsewhere.md>)\n- killed 3 goblins\n- killed 4 goblins\n";
+
+        assert_eq!(
+            append(content, date(2026, 9, 19), "killed 4 goblins").unwrap(),
+            expected
+        );
     }
 }
