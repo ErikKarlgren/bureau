@@ -27,4 +27,5 @@ committed.
 dossier's `## Worklog` section and links that dossier from the same day's entry.
 A filter matching several dossiers opens a picker; with no filter the most
 recently modified dossier wins, or the picker opens when several share the
-newest timestamp.
+newest timestamp. `--date` logs against another day instead of today, which is
+how you backfill; it is the only way to do so.
