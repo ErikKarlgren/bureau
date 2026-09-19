@@ -1,10 +1,21 @@
-# ammonite
-Work Dossiers for Legacy Systems
+# bureau
+Git-based Work Dossiers for Legacy Systems
+
+## Requirements
+- `git`
+- Linux or Windows
 
 ## Installation
-1. Create a repository for storing ammonite's files. Let's say it's in the directory `$DIR`.
-2. Enter the repository with `cd $DIR`.
-2. Install ammonite as a git submodule with the following command. Ensure there isn't a folder called `ammonite/` in your repo, or choose another name for the directory.
 ```bash
-git submodule add <repository>
+cargo install --path .
 ```
+
+## Usage
+Run it from inside the git repository where you keep your notes:
+
+```bash
+bureau new dossier Some dossier name
+```
+
+The dossier is written to `dossiers/<name>.md` at the root of that repository
+and committed. `bureau new` will also create daily entries in the future.

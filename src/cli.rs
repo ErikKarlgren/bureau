@@ -1,0 +1,36 @@
+//! The command line interface.
+
+use clap::{Args, Parser, Subcommand};
+
+/// Git-based work dossiers for legacy systems.
+#[derive(Debug, Parser)]
+#[command(version)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+/// What bureau can do.
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Create a new dossier or entry.
+    New {
+        #[command(subcommand)]
+        command: NewCommand,
+    },
+}
+
+/// What `bureau new` can create.
+#[derive(Debug, Subcommand)]
+pub enum NewCommand {
+    /// Create a new dossier and commit it.
+    Dossier(DossierArgs),
+}
+
+/// Arguments for `bureau new dossier`.
+#[derive(Debug, Args)]
+pub struct DossierArgs {
+    /// Dossier name (no need to quote if it has spaces)
+    #[arg(required = true, num_args = 1..)]
+    pub name: Vec<String>,
+}
