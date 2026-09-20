@@ -49,3 +49,6 @@ New files start from [`templates/dossier.md`](templates/dossier.md) and
 [`templates/daily-entry.md`](templates/daily-entry.md). Those templates are
 embedded in the binary at build time, so changing them takes effect after a
 reinstall.
+
+## License
+MIT. See [LICENSE](LICENSE).
