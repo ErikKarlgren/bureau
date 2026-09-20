@@ -50,5 +50,31 @@ New files start from [`templates/dossier.md`](templates/dossier.md) and
 embedded in the binary at build time, so changing them takes effect after a
 reinstall.
 
+Tasks are generally added to a dossier, although they could be added to a daily
+entry if they don't really belong to an existing dossier. They follow this
+custom format:
+```markdown
+- Just some text
+- [ ] todo task, not started yet
+- [.] work in progress
+- [o] presumably almost finished
+- [x] done
+- [-] won't do, cancelled
+- [?] on wait
+```
+
+Tasks can be put inside other tasks in a hierarchical fashion, like this:
+```markdown
+- [.] Refactor billing system
+    - [x] Check what files to refactor
+        - Files: billing.rs, billing.html
+    - Follow the guidelines doc Tom shared with you
+    - [?] Decide whether to rewrite the `find_client()` function
+        - Waiting for John for feedback
+    - [.] Add more checks
+```
+`bureau tasks` will show all pending tasks you have. With `--all` it will also
+show closed ones.
+
 ## License
 MIT. See [LICENSE](LICENSE).
