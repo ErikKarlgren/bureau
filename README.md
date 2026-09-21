@@ -73,8 +73,15 @@ Tasks can be put inside other tasks in a hierarchical fashion, like this:
         - Waiting for John for feedback
     - [.] Add more checks
 ```
-`bureau tasks` will show all pending tasks you have. With `--all` it will also
-show closed ones.
+`bureau tasks` lists those tasks as a tree, grouped into `PENDING`, `BLOCKED`
+and — with `--all` — `FINISHED`. A task is shown together with the parents that
+lead to it, so it is clear where it sits even when only one branch of a dossier
+is printed; a `[?]` task counts as blocked, and so does anything under it.
+Dossiers are listed most recently modified first, after the daily entries.
+`--filter [<pattern>]` narrows the listing to one dossier the same way
+`bureau worklog` picks one, `--menu` opens the picker, and sealed dossiers are
+never listed, not even with `--all`. The exact rules, output format and
+examples live in [`docs/subcommands/tasks.md`](docs/subcommands/tasks.md).
 
 ## License
 MIT. See [LICENSE](LICENSE).
