@@ -12,13 +12,10 @@ use dialoguer::FuzzySelect;
 
 use crate::Result;
 use crate::cli::WorklogArgs;
+use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
 use crate::git;
 use crate::template;
 use crate::worklog;
-
-/// The directories, inside the repository, that bureau reads and writes.
-const DOSSIERS: &str = "dossiers";
-const ENTRIES: &str = "entries";
 
 /// Log one line of work against a dossier, and link it from that day's entry.
 ///
@@ -54,17 +51,17 @@ fn run_in(root: &Path, args: &WorklogArgs, prompt: impl FnOnce() -> Result<Strin
         );
     }
 
-    let entry_path = root.join(ENTRIES).join(format!("{date}.md"));
+    let entry_path = root.join(ENTRIES_DIR).join(format!("{date}.md"));
     let entry = entry_contents(&entry_path, date)?;
     let entry_shown = relative(&entry_path, root);
     let filename = file_name(&dossier);
-    let dossier_link = format!("../{DOSSIERS}/{filename}");
+    let dossier_link = format!("../{DOSSIERS_DIR}/{filename}");
     let linked = worklog::add_link(&entry, &name, &dossier_link);
 
     println!("Logging to {name}");
     let message = prompt()?;
 
-    let entry_link = format!("../{ENTRIES}/{date}.md");
+    let entry_link = format!("../{ENTRIES_DIR}/{date}.md");
     let updated = worklog::append_message(&contents, date, &message, &entry_link)
         .with_context(|| format!("'{}' has no '## Worklog' section", chosen.display()))?;
 
@@ -72,7 +69,7 @@ fn run_in(root: &Path, args: &WorklogArgs, prompt: impl FnOnce() -> Result<Strin
     // the link is already recorded, so re-running adds the bullet once rather
     // than twice.
     if let Some(updated) = &linked {
-        let entries_dir = root.join(ENTRIES);
+        let entries_dir = root.join(ENTRIES_DIR);
         fs::create_dir_all(&entries_dir)
             .with_context(|| format!("could not create '{}'", entries_dir.display()))?;
         fs::write(&entry_path, updated)
@@ -177,7 +174,7 @@ fn prompt_for_message() -> Result<String> {
 
 /// Every `.md` file in the repository's dossiers directory.
 fn read_dossiers(root: &Path) -> Result<Vec<PathBuf>> {
-    let directory = root.join(DOSSIERS);
+    let directory = root.join(DOSSIERS_DIR);
     let entries = match fs::read_dir(&directory) {
         Ok(entries) => entries,
         // No dossiers directory yet simply means no dossiers.

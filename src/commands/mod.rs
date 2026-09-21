@@ -1,6 +1,7 @@
 //! Subcommand implementations.
 
 mod new;
+mod paths;
 mod worklog;
 
 use crate::Result;
