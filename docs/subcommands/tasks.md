@@ -13,16 +13,16 @@ and never commits.
 ## Usage
 
 ```bash
-bureau tasks [--filter [<pattern>]] [--menu] [--all]
+bureau tasks [--filter[=<pattern>]] [--menu] [--all]
 ```
 
 | Argument | Meaning |
 |---|---|
-| `--filter` | With no pattern: the most recently modified dossier. With a pattern: the dossier whose name contains it (case-insensitive). If several match, the same picker `worklog` uses opens. Entries are never included in a filtered run. |
+| `--filter[=<pattern>]` | With no pattern: the most recently modified dossier. With a pattern: the dossier whose name contains it (case-insensitive). If several match, the same picker `worklog` uses opens. Entries are never included in a filtered run. The pattern is attached with `=`, so `--filter auth` is an error and `--filter=auth` is not: an optional value that can also be a separate argument is how `--filter` with no pattern gets mistaken for `--filter` with somebody else's argument. |
 | `--menu` | Open that picker over every dossier, filter or not. |
-| `--all` | Also print the `FINISHED` section. |
+| `--all` | Also print the `FINISHED` section, for dossiers only. |
 
-No arguments: every source, `PENDING` and `BLOCKED` only.
+No arguments: every source, `ACTIONABLE` and `BLOCKED` only.
 
 ### Selection
 
@@ -33,8 +33,8 @@ carries over:
 |---|---|
 | `bureau tasks` | every entry and every dossier |
 | `bureau tasks --filter` | the newest dossier by modification time; the picker when several share that timestamp |
-| `bureau tasks --filter auth` | the one dossier matching `auth`; the picker when several match |
-| `bureau tasks --filter auth --menu` | the picker over all dossiers |
+| `bureau tasks --filter=auth` | the one dossier matching `auth`; the picker when several match |
+| `bureau tasks --filter=auth --menu` | the picker over all dossiers |
 | `bureau tasks --menu` | the picker over all dossiers |
 
 `--filter <pattern>` that matches nothing is an error (`no dossier matches
@@ -45,7 +45,7 @@ An empty result is not a failure.
 ## Output
 
 ```
-=== PENDING ===
+=== ACTIONABLE ===
 # 2026-09-21 (entry)
 - [ ] ask Tom about the auth split
 # 1234 - refactor authentication
@@ -83,8 +83,13 @@ With `--all`, the same output plus:
 
 ### Shape rules
 
-- Sections print in the order `PENDING`, `BLOCKED`, `FINISHED`. A section with
+- Sections print in the order `ACTIONABLE`, `BLOCKED`, `FINISHED`. A section with
   nothing in it is not printed at all.
+- `FINISHED` is a dossiers-only section. A finished task in a daily entry is
+  never printed, with or without `--all`; entries appear in `ACTIONABLE` and
+  `BLOCKED` and nowhere else. Daily entry tasks are meant to be closed the day
+  they are written, so a finished one is a leftover rather than history worth
+  keeping a listing of.
 - Each source (entry or dossier) that has something to show is printed once per
   section, as `# <heading>` followed by its tree.
 - Entries first, newest date first. Then dossiers, most recently modified
@@ -122,13 +127,15 @@ With `--all`, the same output plus:
 When every printed section would be empty, the whole run prints exactly:
 
 ```
-No pending tasks
+No actionable tasks
 ```
 
 (no trailing full stop). That covers a repository with no notes at all, and a
 repository whose dossiers only hold finished tasks. With `--all` the
-`FINISHED` section counts, so this line appears only when there is genuinely
-nothing anywhere.
+`FINISHED` section counts, so this line appears only when no dossier has
+anything unfinished and no entry has anything at all — an entry holding nothing
+but finished tasks prints this line, because those tasks are not shown
+anywhere either.
 
 ## Grammar
 
@@ -152,16 +159,16 @@ A task is a bullet whose text starts with a marker:
 
 | Symbol | State | Section |
 |---|---|---|
-| `[ ]` | pending, not started | `PENDING` |
-| `[.]` | pending, in progress | `PENDING` |
-| `[o]` | pending, almost done | `PENDING` |
-| `[?]` | on wait | `PENDING` and `BLOCKED` |
+| `[ ]` | not started | `ACTIONABLE` |
+| `[.]` | in progress | `ACTIONABLE` |
+| `[o]` | almost done | `ACTIONABLE` |
+| `[?]` | on wait | `BLOCKED` |
 | `[x]` | done | `FINISHED` |
 | `[-]` | cancelled | `FINISHED` |
 
-A `[?]` task is the one marker that belongs to two sections, because it is
-open (there is something left to do, eventually) and blocked (it cannot be done
-yet). It is listed under both, with the same marker.
+A `[?]` task belongs to `BLOCKED` alone, even though there is still work to do
+on it: `ACTIONABLE` is the list of things that can be picked up, and something
+waiting on somebody else is not one of them.
 
 Any other symbol (`[!]`, `[>]`, `[X]`, …) is not a recognised marker, so the
 bullet is treated as prose and ignored. Nothing is reported about it: this is a
@@ -169,31 +176,45 @@ listing, not a linter.
 
 ### What counts as a parent
 
-Indentation decides nesting, measured in columns:
+Nesting comes from comparing indentation, never from a width:
 
-- A tab advances to the next multiple of 4 (a tab stop).
-- A space advances one column.
-- The level of a bullet is its column count divided by 2, rounding down.
+> A bullet nests into the nearest bullet above it that is indented **less**
+> than it is. A bullet indented **the same** as one above it is that bullet's
+> sibling, and closes off everything deeper.
 
-So two-space and four-space nesting both work, and mixing them in one file is
-tolerated rather than reported. The level is relative, not absolute: a bullet
-with no indentation is at level 0 whether it sits under `## Notes` or under
-nothing at all.
+No width is assumed and none is rounded to a level. Two spaces, four, six, a
+tab or an odd number of columns all mean the same thing — deeper than the last
+one, or level with it — so a file indented four spaces and a file indented two
+nest identically, and a file that uses both is read as it looks. Indentation is
+counted in columns, with a tab advancing to the next multiple of 4 so that tabs
+at least compare sensibly against spaces.
 
-Bullets nest onto the last bullet seen with a lower level. A bullet whose level
-jumps more than one past its predecessor — the first bullet at level 0, then
-one at level 4 — attaches to that predecessor as if it were one level deeper,
-rather than inventing phantom levels or dropping the line. Non-bullet lines are
-ignored for nesting, so a continuation line under a task does not disturb it.
+Depth is relative, not absolute: the shallowest bullet in a file is a root
+whatever its indentation, whether it sits under `## Notes` or under nothing at
+all. Non-bullet lines are ignored for nesting, so a continuation line under a
+task does not disturb it.
 
-For example, with two-space steps:
+The comparison is what keeps a family of bullets at one indentation flat. Four
+spaces is not "two levels"; it is simply deeper than the bullets above, so both
+of these print the same way:
 
 ```markdown
-- [.] A
-    - [x] B          level 2, child of A
-  - [ ] C            level 1, child of A, sibling of B
-- [ ] D              level 0, new root
+- [ ] a
+- [ ] b
+    - [ ] c
+    - [ ] d
 ```
+
+```markdown
+- [ ] a
+- [ ] b
+  - [ ] c
+  - [ ] d
+```
+
+Were each bullet's depth counted off in fixed steps, the second bullet at a
+given indentation would find itself one level deeper than the first, and the
+list would staircase.
 
 ### Records
 
@@ -216,34 +237,42 @@ State predicates:
 - **finished**: `[x]`, `[-]`
 
 `blocked` is derived rather than read off one marker: a task is blocked when it
-or any of its ancestors is `[?]`. A `[?]` task is therefore both open and
-blocked, which is why it can appear in two sections at once.
+is `[?]`, or when any of its ancestors is. A `[?]` task is therefore open *and*
+blocked, which is what keeps it out of `ACTIONABLE` while its own section lists
+it.
 
 Section predicates. A *match* is what a section is about; the next subsection
 turns matches into printed lines:
 
 | Section | A task matches when |
 |---|---|
-| `PENDING` | it is open, or it has an open descendant |
+| `ACTIONABLE` | it is open and not blocked |
 | `BLOCKED` | it is blocked, or it has a blocked descendant |
 | `FINISHED` | it is finished **and** it has no unfinished descendant |
 
-The `FINISHED` row is not "it is finished". A finished task with unfinished work
-below it is excluded from `FINISHED` outright, and this is an exception to every
-other rule rather than a consequence of one:
+A task's marker is a statement about *that task*, and each section takes it at
+face value. `- [.] Implement feat A` with `- [x] Do X` and `- [x] Do Y` under it
+is still work in progress, because `A` is more than `X` plus `Y`, and it is
+still listed even when the only thing left under it is blocked. What a marker
+does not do is decide what is below it: a closed child never prints in
+`ACTIONABLE`, and neither does anything under a `[?]`.
+
+The `FINISHED` row is the one place that is not "it is finished". A finished
+task with unfinished work below it is excluded from `FINISHED` outright, and
+this is an exception to every other rule rather than a consequence of one:
 
 > A finished task with at least one unfinished task anywhere below it is never
 > printed in `FINISHED`, not even as the ancestor of a match.
 
 So `- [x] Create tests` does not appear in `FINISHED` while
 `- [o] Data structures` hangs below it, and `- [x] Data structures`, which would
-qualify on its own, disappears along with it. It appears in `PENDING` instead,
+qualify on its own, disappears along with it. It appears in `ACTIONABLE` instead,
 as the ancestor of the work that is left. The same goes for a `[-]` task, and
 for one whose unfinished descendant is several levels down, not just a direct
 child.
 
 `FINISHED` is the only section that turns a task away because of what is below
-it. In `PENDING` and in `BLOCKED` a finished task is let in for exactly that
+it. In `ACTIONABLE` and in `BLOCKED` a finished task is let in for exactly that
 reason — it is the context for the work left under it — and its own marker is
 printed unchanged. A finished task with nothing unfinished below it has no such
 reason, so those sections do not print it at all; that is what `--all` is for.
@@ -268,10 +297,10 @@ implementation is most likely to go wrong: `FINISHED` does not walk *through* a
 task it has excluded. `- [x] Data structures` under `- [x] Create tests` matches
 the predicate on its own, and is still never printed, because every path to it
 runs through a task the section refuses to show. So a closed subtree appears
-only when the whole chain above it qualifies, and once a `PENDING` or `BLOCKED`
+only when the whole chain above it qualifies, and once an `ACTIONABLE` or `BLOCKED`
 match is taken out, nothing below it can put it back.
 
-Worked through in `PENDING` for the dossier at the top of this document:
+Worked through in `ACTIONABLE` for the dossier at the top of this document:
 
 - `- [o] Split auth.rs` matches (it is open), so it prints. Its child
   `- [o] Logic` also matches, so it prints too, indented under it. Its other
@@ -285,17 +314,24 @@ Worked through in `PENDING` for the dossier at the top of this document:
   `- [x] Happy path` next to it is not printed.
 - `- Random comment` is not a task and never matches, but it is the ancestor of
   `- [ ] Ask Tom…`, so it prints and brings that one line with it.
+- `- [?] API: waiting to talk with John about this` is missing from all of the
+  above. It is open, but it cannot be worked on, and `ACTIONABLE` is not the
+  list of everything unfinished: it is the list of what can be picked up. Its
+  parent stays, because the marker that is blocked is the child's and not the
+  parent's.
 
 Worked through in `BLOCKED`: `- [o] Split auth.rs` is not blocked but is the
 ancestor of `- [?] API…`, so both print, and `- [o] Logic` — a sibling of the
-blocked task — does not.
+blocked task — does not. So `Split auth.rs` is the one task in the example that
+is listed in every section it could be: `ACTIONABLE` for its own sake, `BLOCKED`
+for its waiting child, and `FINISHED` as the ancestor of a closed one.
 
 Worked through in `FINISHED`, with `--all`: `- [x] Check current auth docs`
 matches and prints alone. `- [o] Split auth.rs` is the ancestor of the match
 `- [x] Data structures`, so both print; the ancestor is a `[o]`, and it is the
 `[x]` underneath that matched. `- [x] Create tests` is not printed at all: it
 has unfinished work below it, so the exception takes it out of the section, and
-the closed tasks under it go with it. It appears in `PENDING` instead, as the
+the closed tasks under it go with it. It appears in `ACTIONABLE` instead, as the
 ancestor of what is left — and there `- [x] Data structures` is missing from
 under it, while in `FINISHED` the same task is present. Same task, opposite
 treatment, because the two sections ask different questions.
@@ -305,13 +341,22 @@ treatment, because the two sections ask different questions.
 The rule above means a section can be much shorter than the part of the file it
 came from, and the gaps are the design, not a bug:
 
-- No closed task appears in `PENDING` or in `BLOCKED`, at any depth, even when
+- No closed task appears in `ACTIONABLE` or in `BLOCKED`, at any depth, even when
   the task above it is open or blocked. Finishing `- [x] Data structures` makes
   it vanish from the listing rather than sit there as a tick; `--all` is how you
   ask for closed work.
+- Nothing below a `[?]` appears in `ACTIONABLE`, at any depth, because being
+  under a block is what blocked means. The whole branch is in `BLOCKED`
+  instead. The task *above* the block is a different matter: it is open, it is
+  not blocked, and it prints as a line of its own, since the only thing that
+  could print under it is the blocked work.
+- A finished task in an entry is not printed. `FINISHED` covers dossiers only:
+  the section exists to show work that is worth reviewing later, and a ticked
+  line in a day's notes has already served its purpose. Nothing is lost by it
+  either way, since the entry itself is the record.
 - No sibling is ever printed to "give context". Every printed line is either
   actionable in this section or a link in the chain to something that is.
-- A `[x]` or `[-]` parent of unfinished work prints as an ancestor in `PENDING`
+- A `[x]` or `[-]` parent of unfinished work prints as an ancestor in `ACTIONABLE`
   and `BLOCKED` with its `[x]` marker intact. That is not an oversight: the
   marker is kept (see the shape rules) precisely so a line that looks out of
   place can be told apart from a mistake.
@@ -382,13 +427,15 @@ count of each state would need; nothing counts anything in v1
 
 - Markers: all six, plus the spacing variants `-[x]`, `-  [x]`, `-\t[x]`, plus
   `- I should check [x] later` staying prose and `[X]` staying prose.
-- Nesting: two-space and four-space input, one level in the output; tabs; a
-  level jump from 0 to 4 landing one level deep; blank lines and continuation
-  lines not disturbing the tree; a root-level task in a file with no headings.
+- Nesting: two, four, six, eight and odd-width indentation all nesting one
+  level; tabs; bullets sharing an indentation staying siblings at any width
+  (the staircase regression); blank lines and continuation lines not
+  disturbing the tree; a file whose shallowest bullet is indented still
+  starting at the root.
 - Empty text: `- [ ]` is a task that prints as `- [ ]`.
 - Classification, one test per section predicate, including the cases the spec
   calls out by hand: a `[x]` with unfinished work below it staying out of
-  `FINISHED` and printing in `PENDING` as an ancestor, a closed task under that
+  `FINISHED` and printing in `ACTIONABLE` as an ancestor, a closed task under that
   excluded one staying out of `FINISHED` too, a closed task with a closed child
   matching normally, a closed child of an open task not printing at all, a
   chain of non-task ancestors printing, and a non-task annotation under a task
@@ -404,8 +451,10 @@ count of each state would need; nothing counts anything in v1
 - A dossier with `sealed:` frontmatter is absent, with and without `--all`.
 - The filter, the menu and the newest-dossier rule, driven the way
   `worklog.rs` drives them today (the picker is not exercised).
-- Empty state prints `No pending tasks` and exits 0.
+- Empty state prints `No actionable tasks` and exits 0.
 - A dossier with only finished tasks appears with `--all` and not without.
+- An entry with finished tasks in it prints nothing for them, with `--all` set,
+  while its unfinished tasks still print.
 
 `run_in` takes the root, the args and the prompt, so these run against a
 scratch directory. The `Scratch` helper currently lives in

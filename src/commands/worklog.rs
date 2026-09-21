@@ -1,18 +1,17 @@
 //! `bureau worklog`.
 
-use std::cmp::Reverse;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use anyhow::{Context, bail};
 use chrono::{Local, NaiveDate};
-use dialoguer::FuzzySelect;
 
 use crate::Result;
 use crate::cli::WorklogArgs;
 use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
+use crate::commands::selection;
+use crate::commands::sources;
 use crate::git;
 use crate::template;
 use crate::worklog;
@@ -35,10 +34,10 @@ pub fn run(args: &WorklogArgs) -> Result<()> {
 /// test can drive it without a git checkout or a terminal.
 fn run_in(root: &Path, args: &WorklogArgs, prompt: impl FnOnce() -> Result<String>) -> Result<()> {
     let date = target_date(args.date.as_deref())?;
-    let dossiers = by_recency(read_dossiers(root)?);
+    let dossiers = sources::read_dossiers(root)?;
     let dossier = select(&dossiers, args)?;
     let name = worklog::stem(&dossier);
-    let chosen = relative(&dossier, root);
+    let chosen = sources::relative(&dossier, root);
 
     // Everything that can fail is done before the prompt, so a dossier that
     // cannot take a worklog never costs the user the line they typed.
@@ -53,8 +52,8 @@ fn run_in(root: &Path, args: &WorklogArgs, prompt: impl FnOnce() -> Result<Strin
 
     let entry_path = root.join(ENTRIES_DIR).join(format!("{date}.md"));
     let entry = entry_contents(&entry_path, date)?;
-    let entry_shown = relative(&entry_path, root);
-    let filename = file_name(&dossier);
+    let entry_shown = sources::relative(&entry_path, root);
+    let filename = sources::file_name(&dossier);
     let dossier_link = format!("../{DOSSIERS_DIR}/{filename}");
     let linked = worklog::add_link(&entry, &name, &dossier_link);
 
@@ -108,50 +107,15 @@ fn target_date(date: Option<&str>) -> Result<NaiveDate> {
 /// dossier, and otherwise the most recently modified one wins -- unless
 /// several share that timestamp, in which case they are offered as a choice.
 fn select(dossiers: &[PathBuf], args: &WorklogArgs) -> Result<PathBuf> {
-    if let Some(filter) = args.filter.as_deref() {
-        return match worklog::matching(dossiers, filter).as_slice() {
-            [] => bail!("no dossier matches '{filter}'"),
-            [only] => Ok(only.clone()),
-            several => pick(several),
-        };
-    }
-
-    if dossiers.is_empty() {
-        bail!("there are no dossiers to log against yet");
-    }
-
-    if args.menu {
-        return pick(dossiers);
-    }
-
-    match newest(dossiers) {
-        [only] => Ok(only.clone()),
-        tied => pick(tied),
-    }
-}
-
-/// Ask the user to choose one of `dossiers`.
-fn pick(dossiers: &[PathBuf]) -> Result<PathBuf> {
-    let names: Vec<String> = dossiers
-        .iter()
-        .map(|dossier| worklog::stem(dossier))
-        .collect();
-
-    let choice = FuzzySelect::new()
-        .with_prompt("Select a dossier (Esc or q to cancel)")
-        .items(&names)
-        .interact_opt()
-        .context("could not read your selection")?;
-
-    let Some(index) = choice else {
-        bail!("nothing was selected, so nothing was written");
+    let request = selection::Request {
+        pattern: args.filter.as_deref(),
+        menu: args.menu,
     };
+    let mut chosen = selection::select(dossiers, request, selection::pick)?;
 
-    let dossier = dossiers
-        .get(index)
-        .context("the picker returned a dossier that is not there")?;
-
-    Ok(dossier.clone())
+    chosen
+        .pop()
+        .context("the selection returned no dossier to log against")
 }
 
 /// Read the single line to log, or nothing when there is none to log.
@@ -172,63 +136,6 @@ fn prompt_for_message() -> Result<String> {
     Ok(message.to_owned())
 }
 
-/// Every `.md` file in the repository's dossiers directory.
-fn read_dossiers(root: &Path) -> Result<Vec<PathBuf>> {
-    let directory = root.join(DOSSIERS_DIR);
-    let entries = match fs::read_dir(&directory) {
-        Ok(entries) => entries,
-        // No dossiers directory yet simply means no dossiers.
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("could not read '{}'", directory.display()));
-        }
-    };
-
-    let mut dossiers = Vec::new();
-    for entry in entries {
-        let path = entry
-            .with_context(|| format!("could not read '{}'", directory.display()))?
-            .path();
-        if path.extension().is_some_and(|extension| extension == "md") {
-            dossiers.push(path);
-        }
-    }
-
-    Ok(dossiers)
-}
-
-/// Dossiers sorted most recently modified first, by name within equal times.
-fn by_recency(mut dossiers: Vec<PathBuf>) -> Vec<PathBuf> {
-    dossiers.sort_by_cached_key(|dossier| (Reverse(modified(dossier.as_path())), dossier.clone()));
-
-    dossiers
-}
-
-/// A file's modification time, when the filesystem will tell us one.
-fn modified(path: &Path) -> Option<SystemTime> {
-    fs::metadata(path)
-        .ok()
-        .and_then(|metadata| metadata.modified().ok())
-}
-
-/// The dossiers sharing the newest modification time.
-///
-/// A fresh `git clone` stamps every file with the same time, so this is often
-/// more than one dossier, and the caller asks instead of guessing.
-fn newest(dossiers: &[PathBuf]) -> &[PathBuf] {
-    let Some(first) = dossiers.first() else {
-        return &[];
-    };
-
-    let stamp = modified(first.as_path());
-    let tied = dossiers
-        .iter()
-        .take_while(|dossier| modified(dossier.as_path()) == stamp)
-        .count();
-
-    dossiers.get(..tied).unwrap_or(dossiers)
-}
-
 /// The daily entry for `date`: read from disk, or fresh from the template.
 fn entry_contents(path: &Path, date: NaiveDate) -> Result<String> {
     match fs::read_to_string(path) {
@@ -247,21 +154,9 @@ fn commit(root: &Path, dossier: &Path, entry: &Path, name: &str) {
         eprintln!("warning: {error:?}");
         eprintln!(
             "warning: the worklog was written to '{}' but is not committed",
-            relative(dossier, root).display()
+            sources::relative(dossier, root).display()
         );
     }
-}
-
-/// A path as the user sees it: relative to the repository root when it is
-/// inside it.
-fn relative<'a>(path: &'a Path, root: &Path) -> &'a Path {
-    path.strip_prefix(root).unwrap_or(path)
-}
-
-/// A dossier's file name, extension included.
-fn file_name(path: &Path) -> String {
-    path.file_name()
-        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -269,48 +164,10 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
+    use crate::commands::tests::Scratch;
 
     /// The dossier every test logs against.
     const DOSSIER: &str = "dossiers/0007 - legacy.md";
-
-    /// A scratch repository root that deletes itself afterwards.
-    struct Scratch(PathBuf);
-
-    impl Scratch {
-        /// An empty root for one test.
-        fn new(name: &str) -> io::Result<Self> {
-            let pid = std::process::id();
-            let path = std::env::temp_dir().join(format!("bureau-{pid}-{name}"));
-            fs::remove_dir_all(&path).ok();
-            fs::create_dir_all(&path)?;
-            Ok(Self(path))
-        }
-
-        /// The root, for handing to `run_in`.
-        fn path(&self) -> &Path {
-            self.0.as_path()
-        }
-
-        /// Write `contents` to a path below the root.
-        fn write(&self, relative: &str, contents: &str) -> io::Result<()> {
-            let path = self.0.join(relative);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&path, contents)
-        }
-
-        /// Read a path below the root back.
-        fn read(&self, relative: &str) -> io::Result<String> {
-            fs::read_to_string(self.0.join(relative))
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            fs::remove_dir_all(&self.0).ok();
-        }
-    }
 
     /// Arguments that select the one scratch dossier, so no picker is needed.
     fn args(date: &str) -> WorklogArgs {
