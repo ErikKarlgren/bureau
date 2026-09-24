@@ -20,9 +20,10 @@ bureau tasks [--filter[=<pattern>]] [--menu] [--all]
 |---|---|
 | `--filter[=<pattern>]` | With no pattern: the most recently modified dossier. With a pattern: the dossier whose name contains it (case-insensitive). If several match, the same picker `worklog` uses opens. Entries are never included in a filtered run. The pattern is attached with `=`, so `--filter auth` is an error and `--filter=auth` is not: an optional value that can also be a separate argument is how `--filter` with no pattern gets mistaken for `--filter` with somebody else's argument. |
 | `--menu` | Open that picker over every dossier, filter or not. |
-| `--all` | Also print the `FINISHED` section, for dossiers only. |
+| `--all` | Widen the listing to the work there is nothing to do about: the `FINISHED` section, for dossiers only, and the tasks a `[?]` is holding up, in `BLOCKED`. |
 
-No arguments: every source, `ACTIONABLE` and `BLOCKED` only.
+No arguments: every source, `ACTIONABLE` and `BLOCKED` only, with `BLOCKED`
+holding the `[?]` tasks on their own.
 
 ### Selection
 
@@ -81,10 +82,31 @@ With `--all`, the same output plus:
 - [-] Ask boss about task: nah, he's on vacation the whole month
 ```
 
+`--all` widens `BLOCKED` at the same time. On its own, a wait is all the section
+has to say; with `--all`, the work it is holding up is listed under it:
+
+```
+$ bureau tasks
+=== BLOCKED ===
+- [?] API: waiting to talk with John about this
+```
+
+```
+$ bureau tasks --all
+=== BLOCKED ===
+- [?] API: waiting to talk with John about this
+  - [ ] Regenerate the client
+  - [o] Port the callers
+```
+
 ### Shape rules
 
 - Sections print in the order `ACTIONABLE`, `BLOCKED`, `FINISHED`. A section with
   nothing in it is not printed at all.
+- `--all` widens `BLOCKED` as well as adding `FINISHED`: a `[?]` is listed on
+  its own, and the work it is holding up is listed under it. A `[?]` nested
+  further down is a wait in its own right, so it is listed either way, together
+  with the chain of tasks that reaches it.
 - `FINISHED` is a dossiers-only section. A finished task in a daily entry is
   never printed, with or without `--all`; entries appear in `ACTIONABLE` and
   `BLOCKED` and nowhere else. Daily entry tasks are meant to be closed the day
@@ -102,7 +124,7 @@ With `--all`, the same output plus:
   input was indented.
 - Every printed task keeps **its own marker**, even when that marker does not
   match the section it is helping to explain: `- [o] Split auth.rs into more
-  modules` appears under `BLOCKED` because it is the ancestor of a blocked
+  modules` appears under `BLOCKED` because it is the ancestor of a waiting
   task, and still reads `[o]`.
 - A non-task bullet prints only when a task below it is printed, as
   `- <original text>` with no marker. That applies at any depth, including a
@@ -168,7 +190,8 @@ A task is a bullet whose text starts with a marker:
 
 A `[?]` task belongs to `BLOCKED` alone, even though there is still work to do
 on it: `ACTIONABLE` is the list of things that can be picked up, and something
-waiting on somebody else is not one of them.
+waiting on somebody else is not one of them. Neither is anything under it,
+which is why that branch takes `--all` to be listed at all.
 
 Any other symbol (`[!]`, `[>]`, `[X]`, …) is not a recognised marker, so the
 bullet is treated as prose and ignored. Nothing is reported about it: this is a
@@ -235,11 +258,19 @@ State predicates:
 
 - **open**: `[ ]`, `[.]`, `[o]`, `[?]`
 - **finished**: `[x]`, `[-]`
+- **waiting**: the marker is `[?]`
+- **blocked**: waiting, or under a task that is
 
-`blocked` is derived rather than read off one marker: a task is blocked when it
-is `[?]`, or when any of its ancestors is. A `[?]` task is therefore open *and*
-blocked, which is what keeps it out of `ACTIONABLE` while its own section lists
-it.
+The first two are read off a marker and the last two are not. `waiting` is
+exactly the `[?]` marker. `blocked` is derived: a task is blocked when it is
+`[?]`, or when any of its ancestors is. A `[?]` task is therefore open *and*
+blocked, which is what keeps it out of `ACTIONABLE`, while `BLOCKED` is where
+the wait itself is listed.
+
+`waiting` and `blocked` are kept apart because `BLOCKED` is about the waits you
+can chase, not about the work they are holding up. The two differ only for a
+task nested under a `[?]`, and that difference is exactly what `--all` asks
+for.
 
 Section predicates. A *match* is what a section is about; the next subsection
 turns matches into printed lines:
@@ -247,7 +278,7 @@ turns matches into printed lines:
 | Section | A task matches when |
 |---|---|
 | `ACTIONABLE` | it is open and not blocked |
-| `BLOCKED` | it is blocked, or it has a blocked descendant |
+| `BLOCKED` | it is waiting; with `--all`, it is blocked |
 | `FINISHED` | it is finished **and** it has no unfinished descendant |
 
 A task's marker is a statement about *that task*, and each section takes it at
@@ -275,7 +306,8 @@ child.
 it. In `ACTIONABLE` and in `BLOCKED` a finished task is let in for exactly that
 reason — it is the context for the work left under it — and its own marker is
 printed unchanged. A finished task with nothing unfinished below it has no such
-reason, so those sections do not print it at all; that is what `--all` is for.
+reason, so those sections do not print it at all; `--all` is how closed work is
+asked for, and `FINISHED` is where it is printed.
 
 ### Rendering a section
 
@@ -322,7 +354,7 @@ Worked through in `ACTIONABLE` for the dossier at the top of this document:
 
 Worked through in `BLOCKED`: `- [o] Split auth.rs` is not blocked but is the
 ancestor of `- [?] API…`, so both print, and `- [o] Logic` — a sibling of the
-blocked task — does not. So `Split auth.rs` is the one task in the example that
+wait — does not. So `Split auth.rs` is the one task in the example that
 is listed in every section it could be: `ACTIONABLE` for its own sake, `BLOCKED`
 for its waiting child, and `FINISHED` as the ancestor of a closed one.
 
@@ -346,10 +378,14 @@ came from, and the gaps are the design, not a bug:
   it vanish from the listing rather than sit there as a tick; `--all` is how you
   ask for closed work.
 - Nothing below a `[?]` appears in `ACTIONABLE`, at any depth, because being
-  under a block is what blocked means. The whole branch is in `BLOCKED`
-  instead. The task *above* the block is a different matter: it is open, it is
-  not blocked, and it prints as a line of its own, since the only thing that
-  could print under it is the blocked work.
+  under a block is what blocked means. It is not listed under `BLOCKED` either:
+  that section is about the waits themselves, so the work a wait is holding up
+  is hidden until `--all` asks for it. The task *above* the block is a
+  different matter: it is open, it is not blocked, and it prints as a line of
+  its own, since the only thing that could print under it is the blocked work.
+- `--all` does not put finished work into `BLOCKED`, even when it sits inside a
+  blocked branch: a closed task is listed in `FINISHED` or nowhere, at either
+  width.
 - A finished task in an entry is not printed. `FINISHED` covers dossiers only:
   the section exists to show work that is worth reviewing later, and a ticked
   line in a day's notes has already served its purpose. Nothing is lost by it
@@ -440,6 +476,10 @@ count of each state would need; nothing counts anything in v1
   matching normally, a closed child of an open task not printing at all, a
   chain of non-task ancestors printing, and a non-task annotation under a task
   not printing.
+- The breadth of `BLOCKED`: a `[?]` printing on its own while `--all` prints the
+  branch it holds up, a `[?]` nested under a `[?]` printing with the chain that
+  reaches it at either width, and a closed task inside a blocked branch staying
+  out of `BLOCKED` at either width.
 - Rendering: a fixture holding every branch of the example dossier, compared
   section by section. It is the regression test for the format, and it is the
   test that would have caught printing `- [x] Create tests` under `FINISHED`.
@@ -453,6 +493,8 @@ count of each state would need; nothing counts anything in v1
   `worklog.rs` drives them today (the picker is not exercised).
 - Empty state prints `No actionable tasks` and exits 0.
 - A dossier with only finished tasks appears with `--all` and not without.
+- A `[ ]` under a `[?]` is absent from the whole run without `--all`, and listed
+  under `BLOCKED` with it.
 - An entry with finished tasks in it prints nothing for them, with `--all` set,
   while its unfinished tasks still print.
 

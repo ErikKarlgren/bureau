@@ -11,7 +11,7 @@ use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
 use crate::commands::selection::{self, Request};
 use crate::commands::sources::{self, Source};
 use crate::git;
-use crate::tasks::{Section, Tree};
+use crate::tasks::{Scope, Section, Tree};
 
 /// The date a daily entry is named after, as `YYYY-MM-DD`.
 const DATE_FORMAT: &str = "%Y-%m-%d";
@@ -49,6 +49,7 @@ fn run_in(
         pattern: args.filter.as_ref().and_then(Filter::pattern),
         menu: args.menu,
     };
+    let scope = if args.all { Scope::All } else { Scope::Actions };
 
     let selected = if request.menu || args.filter.is_some() {
         let chosen = selection::select(
@@ -67,34 +68,35 @@ fn run_in(
     };
 
     match selected {
-        Some(dossier) => render_one(&dossier, args.all),
+        Some(dossier) => render_one(&dossier, scope),
         None => render_all(
             &read_entries(root)?,
             &sources::read_markdown(root, DOSSIERS_DIR)?,
-            args.all,
+            scope,
         ),
     }
 }
 
 /// Every open source, rendered into the sections it has something for.
-fn render_all(entries: &[Entry], dossiers: &[Source], all: bool) -> Result<String> {
+fn render_all(entries: &[Entry], dossiers: &[Source], scope: Scope) -> Result<String> {
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
 
-    for &section in sections_of(all) {
+    for &section in scope.sections() {
         let mut lines = Vec::new();
 
         // Entries are listed while they still have something open, and never
         // in `FINISHED`: a task ticked off in a day's notes has served its
-        // purpose, and the entry is its own record. `--all` reaches dossiers
-        // only, which is why the two loops are not the same shape.
+        // purpose, and the entry is its own record. `FINISHED` reaches
+        // dossiers only, which is why the two loops are not the same shape --
+        // the wider `BLOCKED` that `--all` asks for covers both.
         if section != Section::Finished {
             for entry in entries {
-                lines.extend(source_lines(&entry.path, &entry.heading, section)?);
+                lines.extend(source_lines(&entry.path, &entry.heading, section, scope)?);
             }
         }
         for dossier in dossiers.iter().filter(|dossier| dossier.is_open()) {
             let heading = crate::worklog::stem(dossier.path.as_path());
-            lines.extend(source_lines(&dossier.path, &heading, section)?);
+            lines.extend(source_lines(&dossier.path, &heading, section, scope)?);
         }
 
         if !lines.is_empty() {
@@ -106,28 +108,18 @@ fn render_all(entries: &[Entry], dossiers: &[Source], all: bool) -> Result<Strin
 }
 
 /// The one dossier a filtered run prints.
-fn render_one(path: &Path, all: bool) -> Result<String> {
+fn render_one(path: &Path, scope: Scope) -> Result<String> {
     let heading = crate::worklog::stem(path);
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
 
-    for &section in sections_of(all) {
-        let lines = source_lines(path, &heading, section)?;
+    for &section in scope.sections() {
+        let lines = source_lines(path, &heading, section, scope)?;
         if !lines.is_empty() {
             sections.push((section, lines));
         }
     }
 
     Ok(assemble(&sections))
-}
-
-/// The sections a run prints: `ACTIONABLE` and `BLOCKED`, plus `FINISHED` with
-/// `--all`.
-const fn sections_of(all: bool) -> &'static [Section] {
-    if all {
-        &[Section::Actionable, Section::Blocked, Section::Finished]
-    } else {
-        &[Section::Actionable, Section::Blocked]
-    }
 }
 
 /// The section headings and their trees, with a blank line between sections.
@@ -150,11 +142,11 @@ fn assemble(sections: &[(Section, Vec<String>)]) -> String {
 }
 
 /// One source's lines for one section, under its heading.
-fn source_lines(path: &Path, heading: &str, section: Section) -> Result<Vec<String>> {
+fn source_lines(path: &Path, heading: &str, section: Section, scope: Scope) -> Result<Vec<String>> {
     let contents =
         fs::read_to_string(path).with_context(|| format!("could not read '{}'", path.display()))?;
 
-    let lines = Tree::parse(&contents).render(section);
+    let lines = Tree::parse(&contents).render(section, scope);
     if lines.is_empty() {
         return Ok(lines);
     }
@@ -289,6 +281,35 @@ mod tests {
         assert!(
             out.contains("- [x] Create tests\n  - [o] Data structures\n"),
             "{out}"
+        );
+    }
+
+    #[test]
+    fn tasks_under_a_wait_are_hidden_until_all() {
+        let scratch = Scratch::new("tasks-waiting-subtree").unwrap();
+        scratch
+            .write(
+                "dossiers/7 - blocked.md",
+                "- [?] Waiting on John\n  - [ ] Do X\n  - [o] Do Y\n",
+            )
+            .unwrap();
+
+        let narrow = run_in(scratch.path(), &args(false), no_picker).unwrap();
+        assert_eq!(
+            section(&narrow, "BLOCKED"),
+            "=== BLOCKED ===\n# 7 - blocked\n- [?] Waiting on John",
+            "{narrow}"
+        );
+        // The work under the wait is not actionable either, so a plain run
+        // has nothing to say about it anywhere.
+        assert!(!narrow.contains("Do X"), "{narrow}");
+        assert!(!narrow.contains("Do Y"), "{narrow}");
+
+        let wide = run_in(scratch.path(), &args(true), no_picker).unwrap();
+        assert_eq!(
+            section(&wide, "BLOCKED"),
+            "=== BLOCKED ===\n# 7 - blocked\n- [?] Waiting on John\n  - [ ] Do X\n  - [o] Do Y",
+            "{wide}"
         );
     }
 

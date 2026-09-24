@@ -67,8 +67,8 @@ impl State {
     /// Whether the work is still outstanding.
     ///
     /// `Waiting` is open even though it is also blocked: there is something to
-    /// do, it just cannot be done yet. That is why a `[?]` task is listed
-    /// under two sections.
+    /// do, it just cannot be done yet. Keeping it open is what stops a
+    /// finished task above it from counting as finished itself.
     #[must_use]
     pub const fn is_open(self) -> bool {
         matches!(
@@ -112,6 +112,29 @@ pub enum Section {
     Finished,
 }
 
+/// How much of a section prints.
+///
+/// `Actions` is what a plain run asks for: only the work there is something to
+/// do about right now, which is the tasks to pick up and the waits to chase.
+/// `All`, which `--all` selects, also prints the work there is nothing to do
+/// about: finished tasks, and the tasks a wait is holding up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scope {
+    Actions,
+    All,
+}
+
+impl Scope {
+    /// The sections a run prints, in the order they print.
+    #[must_use]
+    pub const fn sections(self) -> &'static [Section] {
+        match self {
+            Self::Actions => &[Section::Actionable, Section::Blocked],
+            Self::All => &[Section::Actionable, Section::Blocked, Section::Finished],
+        }
+    }
+}
+
 impl Section {
     /// The heading a section prints under.
     #[must_use]
@@ -131,7 +154,11 @@ impl Section {
     /// task in `ACTIONABLE` or `BLOCKED`, where a `[?]` above it would otherwise
     /// drag it in. Either way it can still print as the ancestor of a task
     /// that does match.
-    fn matches(self, tree: &Tree, node: usize) -> bool {
+    ///
+    /// `BLOCKED` is the one section whose width depends on the scope: a plain
+    /// run is about the waits themselves, and `--all` is about everything they
+    /// hold up as well.
+    fn matches(self, tree: &Tree, node: usize, scope: Scope) -> bool {
         if !tree.is_task(node) || (self != Self::Finished && tree.is_finished(node)) {
             return false;
         }
@@ -141,8 +168,12 @@ impl Section {
             // anything above it. A `[?]` task is open but is exactly what its
             // own section is for, so it is not also a pending one.
             Self::Actionable => tree.is_open(node) && !tree.is_blocked(node),
-            // Derived from the marker and from every ancestor's.
-            Self::Blocked => tree.is_blocked(node),
+            // The waits themselves, or -- once `--all` asks for it -- the
+            // whole branch each one is holding up.
+            Self::Blocked => match scope {
+                Scope::Actions => tree.is_waiting(node),
+                Scope::All => tree.is_blocked(node),
+            },
             // `is_finished` alone would print a `[x]` that still has work
             // below it. The section claims the work is over, so a node with
             // anything unfinished underneath does not belong in it.
@@ -261,6 +292,11 @@ impl Tree {
         false
     }
 
+    /// Whether the node's own marker is the one that waits.
+    fn is_waiting(&self, node: usize) -> bool {
+        self.marker(node) == Some(State::Waiting)
+    }
+
     /// Whether the node is a task on wait, or sits anywhere under one.
     fn is_blocked(&self, node: usize) -> bool {
         // Starting at the node itself, so a `[?]` task is blocked for its own
@@ -272,7 +308,7 @@ impl Tree {
                 return false;
             };
 
-            if candidate.marker == Some(State::Waiting) {
+            if self.is_waiting(index) {
                 return true;
             }
 
@@ -288,13 +324,14 @@ impl Tree {
     ///
     /// A node prints when it belongs to the section, or when a node below it
     /// does and it is on the way there. Nothing else prints: no sibling, no
-    /// closed task, and no bullet that is not a link in such a chain.
+    /// closed task, and no bullet that is not a link in such a chain. The
+    /// scope is what decides how wide `BLOCKED` reaches.
     #[must_use]
-    pub fn render(&self, section: Section) -> Vec<String> {
+    pub fn render(&self, section: Section, scope: Scope) -> Vec<String> {
         let mut lines = Vec::new();
 
         for root in &self.roots {
-            self.render_node(*root, section, 0, &mut lines);
+            self.render_node(*root, section, scope, 0, &mut lines);
         }
 
         lines
@@ -309,6 +346,7 @@ impl Tree {
         &self,
         node: usize,
         section: Section,
+        scope: Scope,
         depth: usize,
         lines: &mut Vec<String>,
     ) -> bool {
@@ -316,7 +354,7 @@ impl Tree {
             return false;
         };
 
-        if !self.leads_to_a_match(node, section) {
+        if !self.leads_to_a_match(node, section, scope) {
             return false;
         }
 
@@ -324,7 +362,7 @@ impl Tree {
         // they start and put this line in front of them once they are done.
         let first = lines.len();
         for child in &current.children {
-            self.render_node(*child, section, depth.saturating_add(1), lines);
+            self.render_node(*child, section, scope, depth.saturating_add(1), lines);
         }
         lines.insert(first, indent(&render_bullet(current), depth));
 
@@ -340,8 +378,8 @@ impl Tree {
     /// no open work in it is left out rather than listed under another
     /// heading, and it is not the context for a section that walks through
     /// closed tasks only, which is `FINISHED` itself.
-    fn leads_to_a_match(&self, node: usize, section: Section) -> bool {
-        if section.matches(self, node) {
+    fn leads_to_a_match(&self, node: usize, section: Section, scope: Scope) -> bool {
+        if section.matches(self, node, scope) {
             return true;
         }
 
@@ -360,10 +398,9 @@ impl Tree {
                 return false;
             };
 
-            return current
-                .children
-                .iter()
-                .any(|child| self.is_open(*child) || self.leads_to_a_match(*child, section));
+            return current.children.iter().any(|child| {
+                self.is_open(*child) || self.leads_to_a_match(*child, section, scope)
+            });
         }
 
         let Some(current) = self.nodes.get(node) else {
@@ -373,7 +410,7 @@ impl Tree {
         current
             .children
             .iter()
-            .any(|child| self.leads_to_a_match(*child, section))
+            .any(|child| self.leads_to_a_match(*child, section, scope))
     }
 }
 
@@ -515,9 +552,14 @@ mod tests {
 - [-] Ask boss about task: nah, he's on vacation the whole month
 ";
 
-    /// The lines `section` prints for `content`.
+    /// The lines `section` prints for `content` in a plain run.
     fn rendered(content: &str, section: Section) -> Vec<String> {
-        Tree::parse(content).render(section)
+        rendered_with(content, section, Scope::Actions)
+    }
+
+    /// The same, with the scope spelled out.
+    fn rendered_with(content: &str, section: Section, scope: Scope) -> Vec<String> {
+        Tree::parse(content).render(section, scope)
     }
 
     /// The lines `section` prints, as owned strings.
@@ -760,9 +802,13 @@ mod tests {
     #[test]
     fn a_waiting_task_is_not_pending_whatever_is_under_it() {
         let content = "- [?] Waiting on John\n  - [ ] A\n";
-        let blocked = lines(&["- [?] Waiting on John", "  - [ ] A"]);
 
-        assert_eq!(rendered(content, Section::Blocked), blocked);
+        assert_eq!(
+            rendered(content, Section::Blocked),
+            lines(&["- [?] Waiting on John"])
+        );
+        // The child is blocked too, so it can be neither picked up nor listed
+        // as a wait. `--all` is how it gets asked for.
         assert!(rendered(content, Section::Actionable).is_empty());
     }
 
@@ -775,10 +821,35 @@ mod tests {
     }
 
     #[test]
-    fn a_block_covers_the_branch_below_it() {
+    fn a_block_hides_the_branch_it_holds_up() {
+        let content = "- [?] Waiting on John\n  - [ ] A\n    - [ ] B\n";
+
+        // The wait is listed on its own: the work under it is neither
+        // actionable nor a wait, so a plain run has nothing to say about it.
+        assert_eq!(
+            rendered(content, Section::Blocked),
+            lines(&["- [?] Waiting on John"])
+        );
+    }
+
+    #[test]
+    fn all_lists_the_branch_a_wait_holds_up() {
         let content = "- [?] Waiting on John\n  - [ ] A\n    - [ ] B\n";
         let expected = lines(&["- [?] Waiting on John", "  - [ ] A", "    - [ ] B"]);
 
+        assert_eq!(
+            rendered_with(content, Section::Blocked, Scope::All),
+            expected
+        );
+    }
+
+    #[test]
+    fn a_wait_under_a_wait_prints_with_the_chain_to_it() {
+        let content = "- [?] outer\n  - [ ] mid\n    - [?] inner\n";
+        let expected = lines(&["- [?] outer", "  - [ ] mid", "    - [?] inner"]);
+
+        // `mid` is not a wait, but it is the link to one, so it prints. This
+        // needs no `--all`, because the inner `[?]` is a match of its own.
         assert_eq!(rendered(content, Section::Blocked), expected);
     }
 
@@ -786,10 +857,14 @@ mod tests {
     fn a_finished_task_under_a_blocked_one_is_not_listed_as_blocked() {
         let content = "- [?] Waiting on John\n  - [x] Filed the ticket\n";
 
-        assert_eq!(
-            rendered(content, Section::Blocked),
-            lines(&["- [?] Waiting on John"])
-        );
+        // Closed work stays out of `BLOCKED` at either width: `--all` widens
+        // the branch a wait holds up, it does not put finished tasks in it.
+        for scope in [Scope::Actions, Scope::All] {
+            assert_eq!(
+                rendered_with(content, Section::Blocked, scope),
+                lines(&["- [?] Waiting on John"])
+            );
+        }
     }
 
     #[test]

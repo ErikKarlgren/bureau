@@ -76,16 +76,17 @@ Tasks can be put inside other tasks in a hierarchical fashion, like this:
     - [.] Add more checks
 ```
 `bureau tasks` lists those tasks as a tree, grouped into `ACTIONABLE`, `BLOCKED`
-and — with `--all`, for dossiers only — `FINISHED`. A task is shown together with the parents that
-lead to it, so it is clear where it sits even when only one branch of a dossier
-is printed, and only what is still outstanding is printed: ticking a task off
-takes it out of the listing rather than leaving it there as context. A `[?]`
-task counts as blocked, and so does anything under it, so a blocked branch is
-listed under `BLOCKED` only. Tasks in a daily entry are listed under their
-date, before the dossiers, which follow most recently modified first. `--filter [<pattern>]` narrows the listing to one dossier the
-same way `bureau worklog` picks one, `--menu` opens the picker, and sealed
-dossiers are never listed, not even with `--all`. The exact rules, output
-format and examples live in
+and — with `--all`, for dossiers only — `FINISHED`. A task is shown together
+with the parents that lead to it, so it is clear where it sits even when only
+one branch of a dossier is printed, and only what is still outstanding is
+printed: ticking a task off takes it out of the listing rather than leaving it
+there as context. `BLOCKED` lists the `[?]` tasks themselves — what you are
+waiting on — and the work a wait is holding up stays out of the listing until
+`--all` asks for it. Tasks in a daily entry are listed under their date, before
+the dossiers, which follow most recently modified first. `--filter [<pattern>]`
+narrows the listing to one dossier the same way `bureau worklog` picks one,
+`--menu` opens the picker, and sealed dossiers are never listed, not even with
+`--all`. The exact rules, output format and examples live in
 [`docs/subcommands/tasks.md`](docs/subcommands/tasks.md).
 
 ## License
