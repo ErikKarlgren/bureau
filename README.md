@@ -82,8 +82,12 @@ one branch of a dossier is printed, and only what is still outstanding is
 printed: ticking a task off takes it out of the listing rather than leaving it
 there as context. `BLOCKED` lists the `[?]` tasks themselves — what you are
 waiting on — and the work a wait is holding up stays out of the listing until
-`--all` asks for it. Tasks in a daily entry are listed under their date, before
-the dossiers, which follow most recently modified first. `--filter [<pattern>]`
+`--all` asks for it. Output is coloured when it goes to a terminal — blue for
+what can be picked up, cyan once it has been started, yellow for what is waiting
+on somebody, green for what is over, and dim for the lines that are only there
+to give context — and plain text when it is piped or `NO_COLOR` is set. Tasks in
+a daily entry are listed under their date, before the dossiers, which follow
+most recently modified first. `--filter [<pattern>]`
 narrows the listing to one dossier the same way `bureau worklog` picks one,
 `--menu` opens the picker, and sealed dossiers are never listed, not even with
 `--all`. The exact rules, output format and examples live in

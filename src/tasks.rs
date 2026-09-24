@@ -10,6 +10,8 @@
 
 use std::fmt;
 
+use crate::style::Palette;
+
 /// How many spaces one level of nesting is in the *output*.
 ///
 /// Nothing in the input is measured in levels: how deep a bullet sits is
@@ -325,13 +327,14 @@ impl Tree {
     /// A node prints when it belongs to the section, or when a node below it
     /// does and it is on the way there. Nothing else prints: no sibling, no
     /// closed task, and no bullet that is not a link in such a chain. The
-    /// scope is what decides how wide `BLOCKED` reaches.
+    /// scope is what decides how wide `BLOCKED` reaches, and the palette what
+    /// each line is drawn in.
     #[must_use]
-    pub fn render(&self, section: Section, scope: Scope) -> Vec<String> {
+    pub fn render(&self, section: Section, scope: Scope, palette: Palette) -> Vec<String> {
         let mut lines = Vec::new();
 
         for root in &self.roots {
-            self.render_node(*root, section, scope, 0, &mut lines);
+            self.render_node(*root, section, scope, palette, 0, &mut lines);
         }
 
         lines
@@ -347,6 +350,7 @@ impl Tree {
         node: usize,
         section: Section,
         scope: Scope,
+        palette: Palette,
         depth: usize,
         lines: &mut Vec<String>,
     ) -> bool {
@@ -362,9 +366,19 @@ impl Tree {
         // they start and put this line in front of them once they are done.
         let first = lines.len();
         for child in &current.children {
-            self.render_node(*child, section, scope, depth.saturating_add(1), lines);
+            self.render_node(
+                *child,
+                section,
+                scope,
+                palette,
+                depth.saturating_add(1),
+                lines,
+            );
         }
-        lines.insert(first, indent(&render_bullet(current), depth));
+        lines.insert(
+            first,
+            indent(&render_bullet(current, section, palette), depth),
+        );
 
         true
     }
@@ -506,8 +520,34 @@ fn bullet_text(text: &str) -> String {
     text.strip_prefix(' ').unwrap_or(text).to_owned()
 }
 
-/// One node as a bullet line, with no indentation.
-fn render_bullet(node: &Node) -> String {
+/// One node as a bullet line, at no indentation, in the colours for `section`.
+///
+/// A marker the section is about carries the colour, and the text after it is
+/// left alone, so a line reads as a coloured marker rather than a coloured
+/// sentence. Everything else -- a marker that belongs to another section, and a
+/// bullet with no marker at all -- is context, and recedes whole.
+fn render_bullet(node: &Node, section: Section, palette: Palette) -> String {
+    let hued = node
+        .marker
+        .and_then(|state| palette.marker(section, state).map(|style| (state, style)));
+
+    let Some((state, style)) = hued else {
+        return palette.context().paint(&plain_bullet(node));
+    };
+
+    // Rebuilt around the marker rather than cut out of the plain line: the
+    // marker is three characters wide by construction, and slicing text by
+    // offset is exactly what this module does not do.
+    let marker = style.paint(&format!("[{}]", state.symbol()));
+    if node.text.is_empty() {
+        format!("- {marker}")
+    } else {
+        format!("- {marker} {}", node.text)
+    }
+}
+
+/// One node's bullet as plain text, which is what the context style paints.
+fn plain_bullet(node: &Node) -> String {
     match node.marker {
         Some(state) if node.text.is_empty() => format!("- [{}]", state.symbol()),
         Some(state) => format!("- [{}] {}", state.symbol(), node.text),
@@ -559,7 +599,12 @@ mod tests {
 
     /// The same, with the scope spelled out.
     fn rendered_with(content: &str, section: Section, scope: Scope) -> Vec<String> {
-        Tree::parse(content).render(section, scope)
+        rendered_in(content, section, scope, Palette::OFF)
+    }
+
+    /// The same, in the colours a terminal would be given.
+    fn rendered_in(content: &str, section: Section, scope: Scope, palette: Palette) -> Vec<String> {
+        Tree::parse(content).render(section, scope, palette)
     }
 
     /// The lines `section` prints, as owned strings.
@@ -964,6 +1009,61 @@ mod tests {
         assert_eq!(rendered(DOSSIER, Section::Actionable), pending);
         assert_eq!(rendered(DOSSIER, Section::Blocked), blocked);
         assert_eq!(rendered(DOSSIER, Section::Finished), finished);
+    }
+
+    #[test]
+    fn colour_marks_the_marker_and_dims_the_context() {
+        // `[o] A` is the work; `[x] B` is only the way to `[ ] C`, so it
+        // recedes whole while the marker it leads to keeps its hue.
+        let content = "- [o] A\n  - [x] B\n    - [ ] C\n- [ ]\n";
+        let expected = lines(&[
+            "- \x1b[36m[o]\x1b[0m A",
+            "  \x1b[2m- [x] B\x1b[0m",
+            "    - \x1b[34m[ ]\x1b[0m C",
+            "- \x1b[34m[ ]\x1b[0m",
+        ]);
+
+        assert_eq!(
+            rendered_in(content, Section::Actionable, Scope::Actions, Palette::ON),
+            expected
+        );
+    }
+
+    #[test]
+    fn colour_dims_a_bullet_with_no_marker() {
+        let content = "- prose\n  - [ ] task\n";
+        let expected = lines(&["\x1b[2m- prose\x1b[0m", "  - \x1b[34m[ ]\x1b[0m task"]);
+
+        assert_eq!(
+            rendered_in(content, Section::Actionable, Scope::Actions, Palette::ON),
+            expected
+        );
+    }
+
+    #[test]
+    fn colour_keeps_the_wider_blocked_branch_dim() {
+        // `--all` matches the held-up task, but the section's own marker is the
+        // wait, so only that line takes the hue.
+        let content = "- [?] Waiting\n  - [ ] Held up\n";
+        let expected = lines(&[
+            "- \x1b[33m[?]\x1b[0m Waiting",
+            "  \x1b[2m- [ ] Held up\x1b[0m",
+        ]);
+
+        assert_eq!(
+            rendered_in(content, Section::Blocked, Scope::All, Palette::ON),
+            expected
+        );
+    }
+
+    #[test]
+    fn colour_off_prints_exactly_the_plain_lines() {
+        let content = "- [o] A\n  - [x] B\n    - [ ] C\n- prose\n";
+
+        assert_eq!(
+            rendered_in(content, Section::Actionable, Scope::Actions, Palette::OFF),
+            rendered(content, Section::Actionable)
+        );
     }
 
     #[test]

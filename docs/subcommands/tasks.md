@@ -159,6 +159,54 @@ anything unfinished and no entry has anything at all — an entry holding nothin
 but finished tasks prints this line, because those tasks are not shown
 anywhere either.
 
+## Colour
+
+Colour is an aid to scanning, never a carrier of information. Every hue repeats
+something the line already says, so a run with colour off loses nothing but the
+emphasis, and prints byte for byte what it printed before colour existed.
+
+| Line | Drawn in |
+|---|---|
+| `=== ACTIONABLE ===` | bold blue |
+| `=== BLOCKED ===` | bold yellow |
+| `=== FINISHED ===` | bold green |
+| `[ ]` in `ACTIONABLE` | blue |
+| `[.]` and `[o]` in `ACTIONABLE` | cyan |
+| `[?]` in `BLOCKED` | yellow |
+| `[x]` and `[-]` in `FINISHED` | green |
+| `# <heading>`, entry or dossier | bold, no hue |
+| every other task line | dim |
+| a bullet with no marker | dim |
+| `No actionable tasks` | plain |
+
+Three things about that table are worth spelling out.
+
+**A section colours its own markers.** That is a question about the marker, not
+about the section's match predicate. Only `[?]` is yellow in `BLOCKED`: the
+branch `--all` adds is dim, even though the section's predicate calls every task
+in it a match. Since the rule never asks whether a line matched, it never has to
+look at the tree, and a task that appears in two sections can legitimately be
+coloured in one and dim in the other.
+
+**The hue goes on the marker alone.** A task reads as a coloured marker rather
+than a coloured sentence, and its text keeps the terminal's own foreground, so
+colour survives long task text and copy-paste. The exception is the dim
+register, which is about a line's place in the listing rather than about its
+marker, and covers the whole line.
+
+**The palette is the eight basic `ANSI` colours**, plus the bold and dim
+attributes: no 256-colour, no truecolor, and no bright slots, so the terminal's
+theme decides the shades. Only blue, cyan, yellow and green are ever used.
+`[.]` and `[o]` share a hue on purpose: both mean the work has been started, and
+the marker itself is what tells them apart.
+
+### When colour is off
+
+Colour is for a person reading a terminal, so it is left out entirely — no hue,
+no bold, no dim — when standard output is not a terminal, when `NO_COLOR` is set
+to anything non-empty, and when `TERM=dumb`. Nothing prints differently: the
+text is exactly the text of a plain run.
+
 ## Grammar
 
 ### What counts as a task
@@ -431,6 +479,7 @@ notes.
 | `src/commands/mod.rs` | one `match` arm |
 | `src/commands/sources.rs` (new) | `read_markdown(dir)`, `by_recency`, `relative`, `file_name` and the sealed check, moved out of `src/commands/worklog.rs` and shared |
 | `src/commands/paths.rs` | nothing new unless a heading constant is needed |
+| `src/style.rs` (new) | the palette, the marker rule and the decision to draw at all. Pure except for reading the environment and `stdout` |
 | `README.md` | the `bureau tasks` paragraph, matching this spec |
 
 The split is the one the crate already uses: `tasks.rs` holds the fiddly parts
@@ -484,6 +533,19 @@ count of each state would need; nothing counts anything in v1
   section by section. It is the regression test for the format, and it is the
   test that would have caught printing `- [x] Create tests` under `FINISHED`.
 - Determinism: two dossiers with one modification time sort by name.
+- Colour in the renderer: a coloured run paints the marker and leaves the text
+  alone, dims a line that is only there for context, dims a bullet with no
+  marker, and with colour off produces exactly the plain lines.
+
+### Colour (`src/style.rs`)
+
+- Which markers each section hues, and that a section's other marker states take
+  no hue, so `--all`'s branch of `BLOCKED` is context rather than a wall of
+  yellow.
+- That a pipe, `NO_COLOR`, and `TERM=dumb` each turn colour off, as a plain
+  function of those three facts.
+- That the palette draws with the basic `ANSI` slots and the two attributes,
+  with no bright slot and no truecolor in it.
 
 ### Command (`src/commands/tasks.rs`)
 
@@ -497,6 +559,8 @@ count of each state would need; nothing counts anything in v1
   under `BLOCKED` with it.
 - An entry with finished tasks in it prints nothing for them, with `--all` set,
   while its unfinished tasks still print.
+- A coloured run puts the section hue on the section rule, bold on the source
+  heading, the hue on the marker alone, and dim on the line above a match.
 
 `run_in` takes the root, the args and the prompt, so these run against a
 scratch directory. The `Scratch` helper currently lives in
@@ -513,6 +577,8 @@ cargo test
 cargo run -- tasks
 cargo run -- tasks --all
 cargo run -- tasks --filter auth
+cargo run -- tasks | cat            # plain: no escapes reach a pipe
+NO_COLOR=1 cargo run -- tasks       # plain, in a terminal
 ```
 
 ## Out of scope
@@ -521,8 +587,14 @@ cargo run -- tasks --filter auth
 - An `## Pending` / `## Completed` section convention. Sections are ignored on
   purpose: entries have tasks too, and the same rule has to work in both.
 - Sealing dossiers (`TASKS.md`).
-- Colour. The output is plain text; styling the whole CLI is a separate
-  decision.
+- Styling the rest of the CLI. `bureau tasks` has its own palette (see
+  [Colour](#colour)); the other commands print plain text, and a shared
+  convention is a separate decision.
+- Forcing colour through a pipe: `bureau tasks | less -R` gets plain text,
+  because there is no `--color` flag and no `CLICOLOR_FORCE` yet.
+- Windows consoles that do not understand `ANSI` escapes. Colour is written
+  wherever a terminal is attached; enabling virtual terminal processing on a
+  legacy `conhost` needs a platform call that `std` does not make.
 - Filters over entries, over task text, or over states (`--pending`,
   `--blocked`, `--finished`).
 - Statistics. "18 of 20 done" per dossier is a nice idea and nothing in the

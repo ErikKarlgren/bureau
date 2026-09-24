@@ -11,6 +11,7 @@ use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
 use crate::commands::selection::{self, Request};
 use crate::commands::sources::{self, Source};
 use crate::git;
+use crate::style::{self, Palette};
 use crate::tasks::{Scope, Section, Tree};
 
 /// The date a daily entry is named after, as `YYYY-MM-DD`.
@@ -31,18 +32,23 @@ const NOTHING_ACTIONABLE: &str = "No actionable tasks";
 /// Nothing is written either way: this command only reports.
 pub fn run(args: &TasksArgs) -> Result<()> {
     let root = git::toplevel()?;
-    println!("{}", run_in(&root, args, selection::pick)?);
+    println!(
+        "{}",
+        run_in(&root, args, style::for_stdout(), selection::pick)?
+    );
     Ok(())
 }
 
-/// The rest of `run`, with the repository root and the picker handed in, so a
-/// test can drive it without a git checkout or a terminal.
+/// The rest of `run`, with the repository root, the colours and the picker
+/// handed in, so a test can drive it without a git checkout, a terminal or an
+/// environment.
 ///
 /// The picker is only consulted for `--filter` and `--menu`, which are also
 /// the only ways to leave the entries out of a run.
 fn run_in(
     root: &Path,
     args: &TasksArgs,
+    palette: Palette,
     picker: impl Fn(&[PathBuf]) -> Result<PathBuf>,
 ) -> Result<String> {
     let request = Request {
@@ -68,17 +74,23 @@ fn run_in(
     };
 
     match selected {
-        Some(dossier) => render_one(&dossier, scope),
+        Some(dossier) => render_one(&dossier, scope, palette),
         None => render_all(
             &read_entries(root)?,
             &sources::read_markdown(root, DOSSIERS_DIR)?,
             scope,
+            palette,
         ),
     }
 }
 
 /// Every open source, rendered into the sections it has something for.
-fn render_all(entries: &[Entry], dossiers: &[Source], scope: Scope) -> Result<String> {
+fn render_all(
+    entries: &[Entry],
+    dossiers: &[Source],
+    scope: Scope,
+    palette: Palette,
+) -> Result<String> {
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
 
     for &section in scope.sections() {
@@ -91,12 +103,24 @@ fn render_all(entries: &[Entry], dossiers: &[Source], scope: Scope) -> Result<St
         // the wider `BLOCKED` that `--all` asks for covers both.
         if section != Section::Finished {
             for entry in entries {
-                lines.extend(source_lines(&entry.path, &entry.heading, section, scope)?);
+                lines.extend(source_lines(
+                    &entry.path,
+                    &entry.heading,
+                    section,
+                    scope,
+                    palette,
+                )?);
             }
         }
         for dossier in dossiers.iter().filter(|dossier| dossier.is_open()) {
             let heading = crate::worklog::stem(dossier.path.as_path());
-            lines.extend(source_lines(&dossier.path, &heading, section, scope)?);
+            lines.extend(source_lines(
+                &dossier.path,
+                &heading,
+                section,
+                scope,
+                palette,
+            )?);
         }
 
         if !lines.is_empty() {
@@ -104,33 +128,34 @@ fn render_all(entries: &[Entry], dossiers: &[Source], scope: Scope) -> Result<St
         }
     }
 
-    Ok(assemble(&sections))
+    Ok(assemble(&sections, palette))
 }
 
 /// The one dossier a filtered run prints.
-fn render_one(path: &Path, scope: Scope) -> Result<String> {
+fn render_one(path: &Path, scope: Scope, palette: Palette) -> Result<String> {
     let heading = crate::worklog::stem(path);
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
 
     for &section in scope.sections() {
-        let lines = source_lines(path, &heading, section, scope)?;
+        let lines = source_lines(path, &heading, section, scope, palette)?;
         if !lines.is_empty() {
             sections.push((section, lines));
         }
     }
 
-    Ok(assemble(&sections))
+    Ok(assemble(&sections, palette))
 }
 
 /// The section headings and their trees, with a blank line between sections.
-fn assemble(sections: &[(Section, Vec<String>)]) -> String {
+fn assemble(sections: &[(Section, Vec<String>)], palette: Palette) -> String {
     if sections.is_empty() {
         return NOTHING_ACTIONABLE.to_owned();
     }
 
     let mut blocks: Vec<String> = Vec::new();
     for (section, lines) in sections {
-        let mut block = format!("{SECTION_RULE} {} {SECTION_RULE}\n", section.heading());
+        let rule = format!("{SECTION_RULE} {} {SECTION_RULE}", section.heading());
+        let mut block = format!("{}\n", palette.section(*section).paint(&rule));
         for line in lines {
             block.push_str(line);
             block.push('\n');
@@ -142,16 +167,22 @@ fn assemble(sections: &[(Section, Vec<String>)]) -> String {
 }
 
 /// One source's lines for one section, under its heading.
-fn source_lines(path: &Path, heading: &str, section: Section, scope: Scope) -> Result<Vec<String>> {
+fn source_lines(
+    path: &Path,
+    heading: &str,
+    section: Section,
+    scope: Scope,
+    palette: Palette,
+) -> Result<Vec<String>> {
     let contents =
         fs::read_to_string(path).with_context(|| format!("could not read '{}'", path.display()))?;
 
-    let lines = Tree::parse(&contents).render(section, scope);
+    let lines = Tree::parse(&contents).render(section, scope, palette);
     if lines.is_empty() {
         return Ok(lines);
     }
 
-    let mut shown = vec![format!("# {heading}")];
+    let mut shown = vec![palette.heading().paint(&format!("# {heading}"))];
     shown.extend(lines);
     Ok(shown)
 }
@@ -270,7 +301,7 @@ mod tests {
     #[test]
     fn lists_pending_and_blocked_without_all() {
         let scratch = with_dossier("tasks-pending");
-        let out = run_in(scratch.path(), &args(false), no_picker).unwrap();
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
 
         assert!(out.contains("=== ACTIONABLE ==="), "{out}");
         assert!(out.contains("=== BLOCKED ==="), "{out}");
@@ -294,7 +325,7 @@ mod tests {
             )
             .unwrap();
 
-        let narrow = run_in(scratch.path(), &args(false), no_picker).unwrap();
+        let narrow = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
         assert_eq!(
             section(&narrow, "BLOCKED"),
             "=== BLOCKED ===\n# 7 - blocked\n- [?] Waiting on John",
@@ -305,7 +336,7 @@ mod tests {
         assert!(!narrow.contains("Do X"), "{narrow}");
         assert!(!narrow.contains("Do Y"), "{narrow}");
 
-        let wide = run_in(scratch.path(), &args(true), no_picker).unwrap();
+        let wide = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
         assert_eq!(
             section(&wide, "BLOCKED"),
             "=== BLOCKED ===\n# 7 - blocked\n- [?] Waiting on John\n  - [ ] Do X\n  - [o] Do Y",
@@ -314,9 +345,42 @@ mod tests {
     }
 
     #[test]
+    fn colour_paints_the_rules_the_headings_and_the_markers() {
+        let scratch = with_dossier("tasks-colour");
+        let out = run_in(scratch.path(), &args(false), Palette::ON, no_picker).unwrap();
+
+        assert!(
+            out.contains("\x1b[1;34m=== ACTIONABLE ===\x1b[0m"),
+            "{out:?}"
+        );
+        assert!(
+            out.contains("\x1b[1m# 1234 - refactor auth\x1b[0m"),
+            "{out:?}"
+        );
+        // The marker carries the colour, and the text after it keeps the
+        // terminal's own foreground.
+        assert!(
+            out.contains("- \x1b[36m[o]\x1b[0m Split auth.rs"),
+            "{out:?}"
+        );
+        assert!(out.contains("- \x1b[34m[ ]\x1b[0m Evil path"), "{out:?}");
+        // A finished task is only the way to the open work below it here, so
+        // the whole line recedes rather than its marker taking a hue.
+        assert!(out.contains("\x1b[2m- [x] Create tests\x1b[0m"), "{out:?}");
+    }
+
+    #[test]
+    fn colour_off_leaves_no_escape_in_the_output() {
+        let scratch = with_dossier("tasks-plain");
+        let out = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
+
+        assert!(!out.contains('\x1b'), "{out:?}");
+    }
+
+    #[test]
     fn adds_the_finished_section_with_all() {
         let scratch = with_dossier("tasks-all");
-        let out = run_in(scratch.path(), &args(true), no_picker).unwrap();
+        let out = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
         let finished = section(&out, "FINISHED");
 
         assert_eq!(
@@ -329,7 +393,7 @@ mod tests {
     #[test]
     fn prints_nothing_pending_when_there_is_nothing_to_show() {
         let scratch = Scratch::new("tasks-empty").unwrap();
-        let out = run_in(scratch.path(), &args(false), no_picker).unwrap();
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
 
         assert_eq!(out, NOTHING_ACTIONABLE);
     }
@@ -337,7 +401,7 @@ mod tests {
     #[test]
     fn a_missing_directory_is_not_an_error() {
         let scratch = Scratch::new("tasks-no-dirs").unwrap();
-        assert!(run_in(scratch.path(), &args(true), no_picker).is_ok());
+        assert!(run_in(scratch.path(), &args(true), Palette::OFF, no_picker).is_ok());
     }
 
     #[test]
@@ -353,7 +417,7 @@ mod tests {
             .write("dossiers/1234 - open.md", "- [ ] Visible\n")
             .unwrap();
 
-        let out = run_in(scratch.path(), &args(true), no_picker).unwrap();
+        let out = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
 
         assert!(out.contains("- [ ] Visible"), "{out}");
         assert!(!out.contains("Never to be seen"), "{out}");
@@ -372,7 +436,7 @@ mod tests {
             .write("entries/not-a-date.md", "## Notes\n- [ ] Skipped\n")
             .unwrap();
 
-        let out = run_in(scratch.path(), &args(false), no_picker).unwrap();
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
         let later = out.find("# 2026-09-21 (entry)").unwrap();
         let earlier = out.find("# 2026-09-19 (entry)").unwrap();
         let dossier = out.find("# 1234 - refactor auth").unwrap();
@@ -393,7 +457,7 @@ mod tests {
             )
             .unwrap();
 
-        let out = run_in(scratch.path(), &args(true), no_picker).unwrap();
+        let out = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
 
         assert!(out.contains("- [ ] Still open"), "{out}");
         assert!(
@@ -414,11 +478,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            run_in(scratch.path(), &args(false), no_picker).unwrap(),
+            run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap(),
             NOTHING_ACTIONABLE
         );
 
-        let out = run_in(scratch.path(), &args(true), no_picker).unwrap();
+        let out = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
         assert!(out.contains("# 1 - done\n- [x] All over\n"), "{out}");
     }
 
@@ -434,7 +498,7 @@ mod tests {
             menu: false,
             all: false,
         };
-        let out = run_in(scratch.path(), &filtered, no_picker).unwrap();
+        let out = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap();
 
         assert!(out.contains("# 2 - other\n- [ ] Elsewhere\n"), "{out}");
         assert!(!out.contains("refactor auth"), "{out}");
@@ -449,7 +513,7 @@ mod tests {
             all: false,
         };
 
-        let error = run_in(scratch.path(), &filtered, no_picker).unwrap_err();
+        let error = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap_err();
         assert!(error.to_string().contains("no dossier matches"), "{error}");
     }
 
@@ -481,7 +545,7 @@ mod tests {
             menu: false,
             all: false,
         };
-        let out = run_in(scratch.path(), &filtered, picked).unwrap();
+        let out = run_in(scratch.path(), &filtered, Palette::OFF, picked).unwrap();
 
         assert!(out.contains("Elsewhere"), "{out}");
         assert!(!out.contains("refactor auth"), "{out}");
@@ -505,7 +569,7 @@ mod tests {
             menu: false,
             all: false,
         };
-        let out = run_in(scratch.path(), &filtered, no_picker).unwrap();
+        let out = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap();
 
         assert!(
             out.contains("Elsewhere"),
