@@ -49,6 +49,10 @@ An empty result is not a failure.
 === ACTIONABLE ===
 # 2026-09-21 (entry)
 - [ ] ask Tom about the auth split
+
+# 2026-09-20 (entry)
+- [ ] start the migration
+
 # 1234 - refactor authentication
 - Random comment
   - [ ] Ask Tom how he'd do X
@@ -58,6 +62,7 @@ An empty result is not a failure.
 - [x] Create tests
   - [o] Data structures
     - [ ] "Evil" path: malformed data, etc
+
 
 === BLOCKED ===
 # 1234 - refactor authentication
@@ -114,6 +119,10 @@ $ bureau tasks --all
   keeping a listing of.
 - Each source (entry or dossier) that has something to show is printed once per
   section, as `# <heading>` followed by its tree.
+- Spacing: a section rule is glued to the first source printed under it; every
+  source after that — entry or dossier alike — is set off by one blank line.
+  Two blank lines separate the sections, which is what tells a new section from
+  a new dossier.
 - Entries first, newest date first. Then dossiers, most recently modified
   first, file name ascending as the tiebreak (a fresh `git clone` stamps every
   file with one time, so the tiebreak decides the whole order there). A dossier

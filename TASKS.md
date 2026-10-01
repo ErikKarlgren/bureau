@@ -87,7 +87,6 @@
       - By "run `bureau worklog`" I mean doing so without shelling out
 
 ## Current features
-- [ ] `bureau tasks` UI: add a space above a "dossier" header name, unless it's the first dossier in its section. This will make `tasks` easier to read in more terminals.
 - [ ] Shell completion for bash and fish
 - [ ] Fix commit behavior. Whenever any `bureau` command is run, all files dependant on `bureau` (for now only entries/ and dossiers/) need to be committed. Need to discuss whether to create 1 commit per file, 1 commit per type of file (e.g. 1 commit for all daily entries, another for all dossiers). The problem to fix is that, after manually editing some files already created with `bureau new`, the changes aren't committed automatically, and then the user needs to do so manually, which is undesired.
 - [ ] `bureau tasks` prints dossiers in `read_dir` order instead of newest first.

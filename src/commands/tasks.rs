@@ -103,24 +103,14 @@ fn render_all(
         // the wider `BLOCKED` that `--all` asks for covers both.
         if section != Section::Finished {
             for entry in entries {
-                lines.extend(source_lines(
-                    &entry.path,
-                    &entry.heading,
-                    section,
-                    scope,
-                    palette,
-                )?);
+                let shown = source_lines(&entry.path, &entry.heading, section, scope, palette)?;
+                push_source(&mut lines, shown);
             }
         }
         for dossier in dossiers.iter().filter(|dossier| dossier.is_open()) {
             let heading = crate::worklog::stem(dossier.path.as_path());
-            lines.extend(source_lines(
-                &dossier.path,
-                &heading,
-                section,
-                scope,
-                palette,
-            )?);
+            let shown = source_lines(&dossier.path, &heading, section, scope, palette)?;
+            push_source(&mut lines, shown);
         }
 
         if !lines.is_empty() {
@@ -146,7 +136,14 @@ fn render_one(path: &Path, scope: Scope, palette: Palette) -> Result<String> {
     Ok(assemble(&sections, palette))
 }
 
-/// The section headings and their trees, with a blank line between sections.
+/// The section headings and their trees, spaced so each dossier reads as its
+/// own block.
+///
+/// A section rule is glued to whatever prints first under it: the blank line
+/// that sets a dossier off from what came before it is added by the caller, and
+/// the first thing in a section gets none. Sections are told apart by two blank
+/// lines, so the wider gap is what says a new heading has started rather than a
+/// new dossier.
 fn assemble(sections: &[(Section, Vec<String>)], palette: Palette) -> String {
     if sections.is_empty() {
         return NOTHING_ACTIONABLE.to_owned();
@@ -163,7 +160,7 @@ fn assemble(sections: &[(Section, Vec<String>)], palette: Palette) -> String {
         blocks.push(block);
     }
 
-    blocks.join("\n")
+    blocks.join("\n\n")
 }
 
 /// One source's lines for one section, under its heading.
@@ -185,6 +182,25 @@ fn source_lines(
     let mut shown = vec![palette.heading().paint(&format!("# {heading}"))];
     shown.extend(lines);
     Ok(shown)
+}
+
+/// Append one source's block to a section, set off from the block before it.
+///
+/// The first source in a section gets no blank line: the rule above it is what
+/// separates it, and keeping it hard against the rule is what stops a heading
+/// from floating away from the section it belongs to. Every source after that
+/// -- entry or dossier alike -- gets exactly one blank line, so both kinds
+/// begin the same way on screen.
+fn push_source(lines: &mut Vec<String>, shown: Vec<String>) {
+    if shown.is_empty() {
+        return;
+    }
+
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    lines.extend(shown);
 }
 
 /// A daily entry: its path, and how it is announced.
@@ -311,6 +327,59 @@ mod tests {
         assert!(out.contains("  - [?] API: waiting on John\n"), "{out}");
         assert!(
             out.contains("- [x] Create tests\n  - [o] Data structures\n"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn the_rule_sits_against_its_first_dossier_and_sections_by_two_blanks() {
+        let scratch = with_dossier("tasks-spacing");
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+
+        // The whole listing, so the gap against the rule and the gap between
+        // two sections are both pinned rather than sampled.
+        assert_eq!(
+            out,
+            "\
+=== ACTIONABLE ===
+# 1234 - refactor auth
+- [o] Split auth.rs
+- [x] Create tests
+  - [o] Data structures
+    - [ ] Evil path
+
+
+=== BLOCKED ===
+# 1234 - refactor auth
+- [o] Split auth.rs
+  - [?] API: waiting on John
+- [x] Create tests
+"
+        );
+    }
+
+    #[test]
+    fn every_source_is_set_off_from_the_one_before_it() {
+        let scratch = with_dossier("tasks-entry-spacing");
+        scratch
+            .write("entries/2026-09-21.md", "## Notes\n- [ ] Newer entry\n")
+            .unwrap();
+        scratch
+            .write("entries/2026-09-20.md", "## Notes\n- [ ] Older entry\n")
+            .unwrap();
+
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+
+        // The rule is glued to the first entry, and every source after it --
+        // the older entry and the dossier alike -- is set off by one blank
+        // line. Entries and dossiers begin the same way on screen.
+        assert!(
+            out.contains(
+                "=== ACTIONABLE ===\n\
+                 # 2026-09-21 (entry)\n- [ ] Newer entry\n\n\
+                 # 2026-09-20 (entry)\n- [ ] Older entry\n\n\
+                 # 1234 - refactor auth\n"
+            ),
             "{out}"
         );
     }
@@ -500,7 +569,8 @@ mod tests {
         };
         let out = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap();
 
-        assert!(out.contains("# 2 - other\n- [ ] Elsewhere\n"), "{out}");
+        // One dossier, one section: the rule sits against it.
+        assert_eq!(out, "=== ACTIONABLE ===\n# 2 - other\n- [ ] Elsewhere\n");
         assert!(!out.contains("refactor auth"), "{out}");
     }
 
