@@ -47,11 +47,11 @@ An empty result is not a failure.
 
 ```
 === ACTIONABLE ===
-# 2026-09-21 (entry)
-- [ ] ask Tom about the auth split
-
 # 2026-09-20 (entry)
 - [ ] start the migration
+
+# 2026-09-21 (entry)
+- [ ] ask Tom about the auth split
 
 # 1234 - refactor authentication
 - Random comment
@@ -123,10 +123,11 @@ $ bureau tasks --all
   source after that — entry or dossier alike — is set off by one blank line.
   Two blank lines separate the sections, which is what tells a new section from
   a new dossier.
-- Entries first, newest date first. Then dossiers, most recently modified
-  first, file name ascending as the tiebreak (a fresh `git clone` stamps every
-  file with one time, so the tiebreak decides the whole order there). A dossier
-  whose modification time cannot be read sorts after the ones that have one.
+- Entries first, oldest date first: the entry that has been open longest is
+  the work to pick up first. Then dossiers, most recently modified first, file
+  name ascending as the tiebreak (a fresh `git clone` stamps every file with
+  one time, so the tiebreak decides the whole order there). A dossier whose
+  modification time cannot be read sorts after the ones that have one.
 - Headings: an entry is `# YYYY-MM-DD (entry)`, a dossier is its file name
   without the extension. Entry files never print their own `##` headings.
 - Indentation in the output is two spaces per level, regardless of how the
@@ -465,7 +466,7 @@ came from, and the gaps are the design, not a bug:
 
 | Directory | Heading | Sort key |
 |---|---|---|
-| `entries/*.md` | `YYYY-MM-DD (entry)` | the date in the file name, newest first |
+| `entries/*.md` | `YYYY-MM-DD (entry)` | the date in the file name, oldest first |
 | `dossiers/*.md` | file stem | modification time, newest first, then file name |
 
 Both directories are optional; neither existing is simply "no sources". A file

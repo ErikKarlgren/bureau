@@ -9,7 +9,7 @@ use chrono::NaiveDate;
 use crate::cli::{Filter, TasksArgs};
 use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
 use crate::commands::selection::{self, Request};
-use crate::commands::sources::{self, Source};
+use crate::commands::sources;
 use crate::git;
 use crate::style::{self, Palette};
 use crate::tasks::{Scope, Section, Tree};
@@ -77,17 +77,21 @@ fn run_in(
         Some(dossier) => render_one(&dossier, scope, palette),
         None => render_all(
             &read_entries(root)?,
-            &sources::read_markdown(root, DOSSIERS_DIR)?,
+            &sources::read_dossiers(root)?,
             scope,
             palette,
         ),
     }
 }
 
-/// Every open source, rendered into the sections it has something for.
+/// Every source, rendered into the sections it has something for.
+///
+/// The dossiers arrive already sorted, most recently modified first, from
+/// [`sources::read_dossiers`]: it is the same order `worklog` and the picker
+/// use, and the sealed ones have already been dropped from the list.
 fn render_all(
     entries: &[Entry],
-    dossiers: &[Source],
+    dossiers: &[PathBuf],
     scope: Scope,
     palette: Palette,
 ) -> Result<String> {
@@ -107,9 +111,9 @@ fn render_all(
                 push_source(&mut lines, shown);
             }
         }
-        for dossier in dossiers.iter().filter(|dossier| dossier.is_open()) {
-            let heading = crate::worklog::stem(dossier.path.as_path());
-            let shown = source_lines(&dossier.path, &heading, section, scope, palette)?;
+        for dossier in dossiers {
+            let heading = crate::worklog::stem(dossier);
+            let shown = source_lines(dossier, &heading, section, scope, palette)?;
             push_source(&mut lines, shown);
         }
 
@@ -209,7 +213,7 @@ struct Entry {
     heading: String,
 }
 
-/// Every daily entry, newest date first.
+/// Every daily entry, oldest date first.
 ///
 /// The date comes from the file name rather than from the filesystem, because
 /// a day is what the entry is about. A file in `entries/` that is not named
@@ -237,8 +241,9 @@ fn read_entries(root: &Path) -> Result<Vec<Entry>> {
         });
     }
 
-    // Newest first, which the same format sorts as text.
-    entries.sort_by(|left, right| right.heading.cmp(&left.heading));
+    // Oldest first: the work that has been waiting longest is the work to
+    // pick up first, and an ISO date sorts as text.
+    entries.sort_by(|left, right| left.heading.cmp(&right.heading));
     Ok(entries)
 }
 
@@ -371,13 +376,13 @@ mod tests {
         let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
 
         // The rule is glued to the first entry, and every source after it --
-        // the older entry and the dossier alike -- is set off by one blank
+        // the newer entry and the dossier alike -- is set off by one blank
         // line. Entries and dossiers begin the same way on screen.
         assert!(
             out.contains(
                 "=== ACTIONABLE ===\n\
-                 # 2026-09-21 (entry)\n- [ ] Newer entry\n\n\
                  # 2026-09-20 (entry)\n- [ ] Older entry\n\n\
+                 # 2026-09-21 (entry)\n- [ ] Newer entry\n\n\
                  # 1234 - refactor auth\n"
             ),
             "{out}"
@@ -510,10 +515,63 @@ mod tests {
         let earlier = out.find("# 2026-09-19 (entry)").unwrap();
         let dossier = out.find("# 1234 - refactor auth").unwrap();
 
-        assert!(later < earlier, "{out}");
-        assert!(earlier < dossier, "{out}");
+        // Oldest first: the entry that has waited longest is the one to pick
+        // up first, and the dossiers follow every entry.
+        assert!(earlier < later, "{out}");
+        assert!(later < dossier, "{out}");
         assert!(!out.contains("Skipped"), "{out}");
         assert!(!out.contains("## Notes"), "{out}");
+    }
+
+    #[test]
+    fn dossiers_print_most_recently_modified_first() {
+        let scratch = with_dossier("tasks-dossier-order");
+        scratch
+            .write("dossiers/5 - other.md", "- [ ] Elsewhere\n")
+            .unwrap();
+        let now = SystemTime::now();
+        set_modified(
+            &scratch.path().join("dossiers/1234 - refactor auth.md"),
+            now,
+        );
+        set_modified(
+            &scratch.path().join("dossiers/5 - other.md"),
+            now - Duration::from_secs(600),
+        );
+
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+        let newest = out
+            .find("# 1234 - refactor auth")
+            .expect("the newest dossier is missing");
+        let oldest = out
+            .find("# 5 - other")
+            .expect("the older dossier is missing");
+
+        assert!(newest < oldest, "the newest dossier prints first:\n{out}");
+    }
+
+    #[test]
+    fn dossiers_sharing_a_modification_time_print_by_name() {
+        let scratch = with_dossier("tasks-dossier-tie");
+        scratch
+            .write("dossiers/5 - other.md", "- [ ] Elsewhere\n")
+            .unwrap();
+        let when = SystemTime::now() - Duration::from_secs(60);
+        set_modified(
+            &scratch.path().join("dossiers/1234 - refactor auth.md"),
+            when,
+        );
+        set_modified(&scratch.path().join("dossiers/5 - other.md"), when);
+
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+        let lower = out
+            .find("# 1234 - refactor auth")
+            .expect("the lower name is missing");
+        let higher = out.find("# 5 - other").expect("the higher name is missing");
+
+        // A fresh clone stamps every file with one time, so the name is what
+        // decides the whole order there.
+        assert!(lower < higher, "the lower name prints first:\n{out}");
     }
 
     #[test]

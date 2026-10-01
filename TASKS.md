@@ -89,15 +89,3 @@
 ## Current features
 - [ ] Shell completion for bash and fish
 - [ ] Fix commit behavior. Whenever any `bureau` command is run, all files dependant on `bureau` (for now only entries/ and dossiers/) need to be committed. Need to discuss whether to create 1 commit per file, 1 commit per type of file (e.g. 1 commit for all daily entries, another for all dossiers). The problem to fix is that, after manually editing some files already created with `bureau new`, the changes aren't committed automatically, and then the user needs to do so manually, which is undesired.
-- [ ] `bureau tasks` prints dossiers in `read_dir` order instead of newest first.
-      The spec asks for "most recently modified first, file name ascending as the
-      tiebreak", and `read_dossiers`/`by_recency` already do exactly that for
-      `worklog`, but `render_all` walks `sources::read_markdown` straight through
-      and never sorts. The order is whatever the filesystem hands back, so it can
-      differ between two runs on the same repository: the same two dossiers came
-      out `1234` then `9820` in one run and `9820` then `1234` in another. Only the
-      unfiltered listing is affected — `--filter` and `--menu` already sort through
-      `by_recency`. Sorting the dossiers the listing prints is the fix, and
-      `by_recency` needs a sibling that takes `Source`s rather than paths, since the
-      sealed check travels with the path. The spec's "two dossiers with one
-      modification time sort by name" test is missing along with it.

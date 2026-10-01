@@ -86,8 +86,8 @@ waiting on — and the work a wait is holding up stays out of the listing until
 what can be picked up, cyan once it has been started, yellow for what is waiting
 on somebody, green for what is over, and dim for the lines that are only there
 to give context — and plain text when it is piped or `NO_COLOR` is set. Tasks in
-a daily entry are listed under their date, before the dossiers, which follow
-most recently modified first. `--filter [<pattern>]`
+a daily entry are listed under their date, oldest first, before the dossiers,
+which follow most recently modified first. `--filter [<pattern>]`
 narrows the listing to one dossier the same way `bureau worklog` picks one,
 `--menu` opens the picker, and sealed dossiers are never listed, not even with
 `--all`. The exact rules, output format and examples live in
