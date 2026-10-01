@@ -22,67 +22,25 @@
       - This tool should also work well enough with Obsidian, Joplin, ... right?
 - [ ] Add a logo to the readme. I'm thinking of a drawer full of dossiers, maybe showing git-related. I wonder if I should really make it with AI due to ethical concerns, even if most of the code here has been written by deepseek.
 - [ ] `bureau rename`: for renaming dossiers and all relevant links, cause right now it'd need to be manually done. This would of course also commit the affected files
-- [ ] `bureau report --from "a week ago" [--to "today"]`: Print a deterministic report following the structure of the example below:
-      - As you can see, the idea is: 1) Add a worklog section showing the work done each day (what about days without work?) categorized per dossier; 2) Show a git diff of each dossierto show a detailed report of everything that changed. Since dossiers show a good deal of the thought process of each task and subtask, this is very valuable info.
-      - The output of this report can be fed to an LLM to ask questions (as a pipe or writing to a file). For example: what have I done in this time period? What might be worth adding to my CV? What should I tell my boss during tomorrow's performance review?
-      - Add a `--brief` or `--no-diff` flag to omit the git diff
-      - Add a `--json` flag to make it easier to consume by LLMs
-      - Don't add an LLM as a direct dependency
-      - Example:
-            ```markdown
-            Report from "a week ago" to "today"
-            # Worklog
-            ## 2026-09-20
-
-            ### Dossier A
-            - Killed 3 goblins
-            - Watered my plants
-
-            ### Dossier B
-            - Bought 2 burritos
-
-
-            ## 2026-09-21
-
-            ### Dossier C
-            - Walked 10 steps
-            - Sprang 10.000 steps
-
-            ### Dossier A
-            - Got a magical wand
-
-            [more dates, more worklog entries for each...]
-
-
-
-            # Git diff
-
-            ## Dossier A
-            ```diff
-            diff --git dossiers/Dossier A.md dossiers/Dossier A.md
-            index 714c718..dcac756 100644
-            --- dossiers/Dossier A.md
-            +++ dossiers/Dossier A.md
-            @@ -82,8 +82,12 @@ one branch of a dossier is printed, and only what is still outstanding is
-             printed: ticking a task off takes it out of the listing rather than leaving it
-             there as context. `BLOCKED` lists the `[?]` tasks themselves — what you are
-             waiting on — and the work a wait is holding up stays out of the listing until
-            -`--all` asks for it. Tasks in a daily entry are listed under their date, before
-            -the dossiers, which follow most recently modified first. `--filter [<pattern>]`
-            +`--all` asks for it. Output is coloured when it goes to a terminal — blue for
-            +what can be picked up, cyan once it has been started, yellow for what is waiting
-            +on somebody, green for what is over, and dim for the lines that are only there
-            +to give context — and plain text when it is piped or `NO_COLOR` is set. Tasks in
-            +a daily entry are listed under their date, before the dossiers, which follow
-            +most recently modified first. `--filter [<pattern>]`
-             narrows the listing to one dossier the same way `bureau worklog` picks one,
-             `--menu` opens the picker, and sealed dossiers are never listed, not even with
-             `--all`. The exact rules, output format and examples live in
-            ```
-
-            ## Dossier B
-            [...]
-            ```
+- [ ] `bureau doctor`: for checking formatting issues
+      - Broken links
+      - Anything else?
+- [ ] `bureau report [<when>] [--from <date>] [--to <date>] [--no-diff] [--filter] [--menu]`:
+      print a reproducible report of the work in a period, built from the notes'
+      contents (worklog dates own the period), with committed git diffs as an
+      appendix. Design settled in `docs/subcommands/report.md`; implementation
+      still to do. Key decisions: files are the source of truth and git is
+      evidence; sealed dossiers and daily entries are included; days without
+      work are omitted; the period is inclusive and "no work in range" is an
+      error; no `--json` for now; no LLM dependency.
+- [ ] `bureau report`'s `<when>`, `--from` and `--to`, and `bureau worklog
+      --date <date>` (TBD), must accept dates in plain english and share one
+      grammar (`src/date.rs`, TBD). The decision is a small hand-rolled closed
+      grammar; the evaluated candidate crates are in
+      `docs/subcommands/report.md`.
+- [ ] `bureau report`'s git diff: `git diff --follow` needs git >= 2.47 and
+      exactly one path. Decide the fallback for older git before implementing
+      (currently: rename detection only). Tracked in `docs/subcommands/report.md`.
 - [ ] `bureau new dossier`: after creating a new dossier, run `bureau worklog`, add the message "created dossier", and link this new dossier to today's entry. If the latter doesn't exist, simply create it then.
       - By "run `bureau worklog`" I mean doing so without shelling out
 

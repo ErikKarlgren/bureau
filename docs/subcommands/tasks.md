@@ -13,12 +13,12 @@ and never commits.
 ## Usage
 
 ```bash
-bureau tasks [--filter[=<pattern>]] [--menu] [--all]
+bureau tasks [--filter [<pattern>]] [--menu] [--all]
 ```
 
 | Argument | Meaning |
 |---|---|
-| `--filter[=<pattern>]` | With no pattern: the most recently modified dossier. With a pattern: the dossier whose name contains it (case-insensitive). If several match, the same picker `worklog` uses opens. Entries are never included in a filtered run. The pattern is attached with `=`, so `--filter auth` is an error and `--filter=auth` is not: an optional value that can also be a separate argument is how `--filter` with no pattern gets mistaken for `--filter` with somebody else's argument. |
+| `--filter [<pattern>]` | With no pattern: the most recently modified dossier. With a pattern: the dossier whose name contains it (case-insensitive). If several match, the same picker `worklog` uses opens. Entries are never included in a filtered run. The pattern is a separate argument, as in `--filter auth`; `--filter` on its own takes the newest dossier. |
 | `--menu` | Open that picker over every dossier, filter or not. |
 | `--all` | Widen the listing to the work there is nothing to do about: the `FINISHED` section, for dossiers only, and the tasks a `[?]` is holding up, in `BLOCKED`. |
 
@@ -34,8 +34,8 @@ carries over:
 |---|---|
 | `bureau tasks` | every entry and every dossier |
 | `bureau tasks --filter` | the newest dossier by modification time; the picker when several share that timestamp |
-| `bureau tasks --filter=auth` | the one dossier matching `auth`; the picker when several match |
-| `bureau tasks --filter=auth --menu` | the picker over all dossiers |
+| `bureau tasks --filter auth` | the one dossier matching `auth`; the picker when several match |
+| `bureau tasks --filter auth --menu` | the picker over all dossiers |
 | `bureau tasks --menu` | the picker over all dossiers |
 
 `--filter <pattern>` that matches nothing is an error (`no dossier matches
