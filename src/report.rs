@@ -148,29 +148,30 @@ pub fn dossier_order(days: &[Day]) -> Vec<String> {
     order
 }
 
-/// The whole report: a header, the daily work, and the diffs.
+/// The whole report: a title, the daily work, and the diffs.
 ///
-/// Empty diffs mean no `# Git diff` section at all, which is what `--no-diff`
-/// asks for and what a period with no commits would produce anyway.
+/// Empty diffs mean no diff section at all, which is what `--no-diff` asks for
+/// and what a period with no commits would produce anyway.
+///
+/// One heading level per thing: the title names the period, a day and the diff
+/// section are `##`, and a dossier is `###` under either of them. A diff is
+/// fenced so it renders as code, and wrapped in Neovim fold markers so a
+/// reader can collapse it; the fence is as long as [`fence_width`] says.
 #[must_use]
 pub fn render(from: NaiveDate, to: NaiveDate, days: &[Day], diffs: &[(String, String)]) -> String {
-    let mut lines = vec![format!("Report from {from} to {to}")];
-    lines.push(String::new());
-    lines.push(String::from("# Daily work"));
+    let mut lines = vec![title(from, to)];
 
-    for day in days {
+    for (index, day) in days.iter().enumerate() {
+        if index > 0 {
+            lines.push(String::new());
+        }
         lines.push(String::new());
         lines.push(format!("## {}", day.date));
 
-        if day.has_entry && day.entry.is_empty() && day.dossiers.is_empty() {
-            lines.push(String::new());
-            lines.push(String::from("(Entry exists but no work was found)"));
-            continue;
-        }
-
         if !day.entry.is_empty() {
-            lines.push(String::new());
             lines.extend(day.entry.iter().cloned());
+        } else if day.has_entry && day.dossiers.is_empty() {
+            lines.push(String::from("(No work found)"));
         }
 
         for (name, body) in &day.dossiers {
@@ -182,12 +183,21 @@ pub fn render(from: NaiveDate, to: NaiveDate, days: &[Day], diffs: &[(String, St
 
     if !diffs.is_empty() {
         lines.push(String::new());
-        lines.push(String::from("# Git diff"));
+        lines.push(String::new());
+        lines.push(String::from("## Complete git diff"));
 
-        for (name, body) in diffs {
+        for (index, (name, body)) in diffs.iter().enumerate() {
+            if index > 0 {
+                lines.push(String::new());
+            }
             lines.push(String::new());
-            lines.push(["{{{", name.as_str()].join(" "));
+            lines.push(format!("### {name}"));
+            lines.push(String::from("{{{ git diff"));
+
+            let fence = "`".repeat(fence_width(body));
+            lines.push(format!("{fence}diff"));
             lines.extend(body.lines().map(str::to_owned));
+            lines.push(fence);
             lines.push(String::from("}}}"));
         }
     }
@@ -195,6 +205,37 @@ pub fn render(from: NaiveDate, to: NaiveDate, days: &[Day], diffs: &[(String, St
     let mut output = lines.join("\n");
     output.push('\n');
     output
+}
+
+/// The report's title: a day is named as a day, a period as a range.
+fn title(from: NaiveDate, to: NaiveDate) -> String {
+    if from == to {
+        format!("# Report for {from}")
+    } else {
+        format!("# Report from {from} to {to}")
+    }
+}
+
+/// How many backticks a fence around `body` needs.
+///
+/// A fenced block is closed by the first line that has at most three spaces of
+/// indentation, then a run of backticks at least as long as the opening fence,
+/// and nothing else. A git diff can hold such a line: an unchanged code fence
+/// in a dossier arrives as a context line, and a context line keeps the space
+/// git marks it with. So the fence is made one backtick longer than anything
+/// the body could close it with, and never shorter than `CommonMark`'s three.
+fn fence_width(body: &str) -> usize {
+    let longest = body
+        .lines()
+        .filter_map(|line| {
+            let content = line.trim_start_matches(' ');
+            let indent = line.len().saturating_sub(content.len());
+            (indent <= 3).then(|| content.chars().take_while(|letter| *letter == '`').count())
+        })
+        .max()
+        .unwrap_or(0);
+
+    longest.saturating_add(1).max(3)
 }
 
 /// Whether any day has anything to print.
@@ -443,7 +484,7 @@ mod tests {
         let output = render(built.from, built.to, &days, &[]);
 
         assert!(
-            output.contains("## 2026-09-20\n\n(Entry exists but no work was found)\n"),
+            output.contains("## 2026-09-20\n(No work found)\n"),
             "{output}"
         );
     }
@@ -456,7 +497,7 @@ mod tests {
 
         assert!(has_work(&days));
         let output = render(built.from, built.to, &days, &[]);
-        assert!(!output.contains("Entry exists"), "{output}");
+        assert!(!output.contains("No work found"), "{output}");
     }
 
     #[test]
@@ -554,23 +595,48 @@ mod tests {
         assert_eq!(
             render(built.from, built.to, &days, &diffs),
             "\
-Report from 2026-09-01 to 2026-09-30
-
-# Daily work
+# Report from 2026-09-01 to 2026-09-30
 
 ## 2026-09-20
 
 ### A
 - did A
 
-# Git diff
 
-{{{ A
+## Complete git diff
+
+### A
+{{{ git diff
+```diff
 diff --git a/dossiers/A.md b/dossiers/A.md
 @@ -1 +1 @@
+```
 }}}
 "
         );
+    }
+
+    #[test]
+    fn the_fence_outgrows_what_the_diff_could_close_it_with() {
+        assert_eq!(fence_width("no backticks here\n"), 3);
+        assert_eq!(fence_width("+```\n"), 3);
+        assert_eq!(fence_width(" ```\n"), 4);
+        assert_eq!(fence_width("   ``````\n"), 7);
+        assert_eq!(fence_width("    ```\n"), 3);
+        assert_eq!(fence_width("\t```\n"), 3);
+    }
+
+    #[test]
+    fn a_diffs_own_fence_line_stays_inside_the_block() {
+        let built = input(vec![dossier("A", &[(date(2026, 9, 20), "- did A\n")])], &[]);
+        let days = days(&built, Palette::OFF);
+        let body = String::from("diff --git a/A.md b/A.md\n@@ -1,3 +1,3 @@\n ```\n-old\n+new\n");
+        let diffs = vec![("A".to_owned(), body)];
+
+        let output = render(built.from, built.to, &days, &diffs);
+
+        assert!(output.contains("````diff\n"), "{output}");
+        assert!(output.contains("\n````\n}}}\n"), "{output}");
     }
 
     #[test]
@@ -580,7 +646,7 @@ diff --git a/dossiers/A.md b/dossiers/A.md
 
         let output = render(built.from, built.to, &days, &[]);
 
-        assert!(!output.contains("# Git diff"), "{output}");
+        assert!(!output.contains("Complete git diff"), "{output}");
     }
 
     #[test]

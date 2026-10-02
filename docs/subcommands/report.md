@@ -36,7 +36,7 @@ bureau report [<date>] [--from <date>] [--to <date>] [--no-diff]
 | `<date>` | One day, in plain English or `YYYY-MM-DD`, e.g. `bureau report yesterday`, `bureau report 2026-09-20`. Expanded to `--from <date> --to <date>`. This is the common case: a single day's report. |
 | `--from <date>` | First day of the period, **inclusive**. Defaults to today when neither it nor `<date>` is given. |
 | `--to <date>` | Last day of the period, **inclusive**. Defaults to today. |
-| `--no-diff` | Omit the whole `# Git diff` section. |
+| `--no-diff` | Omit the whole `## Complete git diff` section. |
 | `--filter <pattern>` | Restrict the report to one dossier. **The pattern is required** (unlike `tasks`), so it can never be mistaken for the `<date>` positional; `--menu` is how the picker is asked for. The matching rule is `bureau worklog`'s. |
 | `--menu` | Open the same picker. |
 
@@ -150,9 +150,9 @@ entry was deleted afterwards, still reports on its own, and is never an error
 about a missing entry.
 
 An entry that renders no bullets still makes the day. In a period that has work
-in it, such a day prints its heading followed by `(Entry exists but no work was
-found)` rather than a bare heading. A day whose only trace is an empty
-`### date` heading -- no entry, no worklog lines -- is left out entirely.
+in it, such a day prints its heading followed by `(No work found)` rather than a
+bare heading. A day whose only trace is an empty `### date` heading -- no
+entry, no worklog lines -- is left out entirely.
 
 Git time does not define the period. This matters because
 `bureau worklog --date` exists precisely to **backfill**: a line dated three
@@ -172,13 +172,10 @@ records the logical day. **Bureau never backdates a commit.**
 
 ## Output
 
-```
-Report from 2026-09-20 to 2026-10-01
-
-# Daily work
+````
+# Report from 2026-09-20 to 2026-10-01
 
 ## 2026-09-20
-
 - [ ] buy shampoo
   - the green one
 
@@ -189,34 +186,51 @@ Report from 2026-09-20 to 2026-10-01
 ### 9820 - mine crypto
 - bought a GPU
 
-## 2026-09-21
 
+## 2026-09-21
 - [x] filed the ticket
 
 ### 1234 - killing goblins was never an option
 - got a magical wand
 
+
 ## 2026-09-22
+(No work found)
 
-(Entry exists but no work was found)
 
-# Git diff
+## Complete git diff
 
-{{{ 1234 - killing goblins was never an option
+### 1234 - killing goblins was never an option
+{{{ git diff
+```diff
 diff --git a/dossiers/1234 - killing goblins was never an option.md b/dossiers/1234 - killing goblins was never an option.md
 ...
+```
 }}}
 
-{{{ 9820 - mine crypto
+
+### 9820 - mine crypto
+{{{ git diff
+```diff
 diff --git a/dossiers/9820 - mine crypto.md b/dossiers/9820 - mine crypto.md
 ...
-}}}
 ```
+}}}
+````
+
+(The outer fence here is four backticks because the example contains three:
+the same rule the report itself follows, see below.)
 
 Shape rules:
 
-- The header prints the **resolved** ISO range. The raw `a week ago` is not
-  echoed.
+- The title prints the **resolved** ISO dates: `# Report for <date>` for a
+  single day, `# Report from <from> to <to>` for a range. The raw `a week ago`
+  is not echoed, and a one-day report is never written as a range.
+- One heading level per thing: the title is the only `#`, a day and the diff
+  section are `##`, and a dossier is `###` under either of them.
+- A heading is followed immediately by its content. One blank line precedes a
+  `###`, two precede a `##`, which is what groups a day and its dossiers into
+  one block while keeping consecutive days apart.
 - **Days ascending**, oldest first.
 - Under a day: the day's **entry content first**, then one `### <dossier>`
   block per dossier that has a worklog line on that day.
@@ -228,11 +242,12 @@ Shape rules:
   inventing a second authority.
 - A day with no worklog lines and no entry file is not in the report at all. A
   day whose entry renders no bullets prints its heading and then
-  `(Entry exists but no work was found)`. The note is entry-only: a day that is
-  in the report for its dossier worklogs alone never carries it.
-- `# Git diff` is last, so `--no-diff` leaves a complete, self-contained daily
-  document. Its blocks follow **first appearance in the period** (the order the
-  dossiers first show up in `# Daily work`), ties broken by name.
+  `(No work found)`. The note is entry-only: a day that is in the report for
+  its dossier worklogs alone never carries it.
+- `## Complete git diff` is last, so `--no-diff` leaves a complete,
+  self-contained daily document. Its blocks follow **first appearance in the
+  period** (the order the dossiers first show up among the days), ties broken
+  by name.
 
 ### Entry content
 
@@ -283,32 +298,51 @@ With `--filter`, the report is dossier-centric: only the chosen dossier's
   not a lost report: the daily work is already assembled and the report's core
   is the notes. The dossier's block is omitted rather than printed empty.
 - A dossier that has worklog lines in the period but has since been deleted
-  cannot be read, so it is absent from `# Daily work`; its diff cannot be
+  cannot be read, so it is absent from the daily work; its diff cannot be
   attached to a current path. Known v1 gap: the report looks at files that are
   there.
 
-### Fence markers
+### The fenced, folded diff
 
-Diff blocks are delimited by Neovim fold markers:
+Each diff is one markdown code block and one Neovim fold:
 
-```
-{{{ <dossier name>
+````
+### <dossier>
+{{{ git diff
+```diff
 ...diff...
-}}}
 ```
+}}}
+````
 
-They are **not** markdown code fences: a rendered markdown view shows plain
-text. That is acceptable because the consumers are a terminal, Neovim
-(`foldmethod=marker`) and an LLM, and the label makes each block fold by
-dossier. Rejected alternatives: backtick fences break the moment a dossier
-contains a code block (and dossiers are markdown, so they will); `~~~` fences
-are valid markdown but do not fold in Neovim.
+`{{{ git diff` and `}}}` are **not** markdown. They are the markers
+`foldmethod=marker` looks for, and the label is constant because the `###`
+heading immediately above already names the block: a fold that repeated a long
+dossier name would be noise, and the heading stays visible when the fold is
+closed. `foldmethod=markdown`, or a treesitter fold, needs none of this and
+folds by the headings alone.
 
-Safety: every line of a `git diff` body carries a leading ` `, `+`, `-` or
-`@`, and header lines are `diff`/`index`/`---`/`+++`, so a line that is
-exactly `}}}` **cannot** occur inside a diff. Entry and worklog lines are
-bullets and start with `-`, so they cannot collide either. If a future section
-ever emits free-form lines, the marker must be lengthened.
+The backtick fence is **computed**, never fixed: `report::fence_width` measures
+the longest run of backticks at the start of a line (after at most three
+spaces) in the diff body and opens with one more, never fewer than three. A
+diff is not only `+` and `-`: unchanged lines arrive as context lines, each
+keeping the space git marks it with, so an unchanged code fence in a dossier
+arrives as a line `CommonMark` would accept as a closing fence. A fixed
+three-backtick fence would end the block in the middle of the diff and spill
+the rest as prose. Lengthening the fence fixes it without touching a byte of
+the diff, so the block stays a real patch that `git apply` accepts.
+
+Rejected alternatives: `-U0` (safe, and simpler, but it throws away the
+unchanged lines that make a diff readable); `--output-indicator-context` (safe,
+and it keeps the context, but git then calls its own output a corrupt patch and
+syntax highlighting loses the context lines); escaping or rewriting the body
+(it is evidence, and rewriting it is the one thing this section must not do).
+
+The fold markers are the weaker half of the pair: Neovim looks for `{{{` and
+`}}}` **anywhere** in a line, so a note or a dossier containing either string
+can open or close a fold early. That needs those characters literally in the
+notes, which is rare, unlike a code fence in a dossier, which is ordinary --
+which is why only the fence is computed.
 
 ## Determinism / reproducibility
 
@@ -351,9 +385,9 @@ printed. To keep that true:
   never reads entries. A one-day period is named as a day even when it was
   asked for with `--from`/`--to`.
 - **A period with some work in it:** its workless entry days are printed with
-  `(Entry exists but no work was found)`, not dropped and not an error.
-- **`--no-diff`:** the `# Git diff` heading is not printed at all (not an
-  empty heading).
+  `(No work found)`, not dropped and not an error.
+- **`--no-diff`:** the `## Complete git diff` heading is not printed at all
+  (not an empty heading).
 
 ## Colour
 
@@ -364,16 +398,15 @@ usually piped to a file or an LLM, where colour is off automatically.
 
 | Line | Drawn in |
 |---|---|
-| `# Daily work`, `# Git diff` | bold, no hue |
+| `# Report …`, `## Complete git diff` | bold, no hue |
 | `## <date>`, `### <dossier>` | bold, no hue |
 | a task marker in entry or worklog content | the `tasks` hue for its state: blue `[ ]`, cyan `[.]`/`[o]`, magenta `[?]`, green `[x]`/`[-]` |
-| `{{{ <dossier>` fold marker | bold, no hue |
-| `Report from …` header and everything else | plain |
+| `{{{ git diff` fold marker and `}}}` | bold, no hue |
+| `(No work found)` and everything else | plain |
 | diff body | git's own colours, see below |
 
 The marker rule is the `tasks` one keyed by **state**, not by a listing section:
-`style::Palette::marker` currently takes a `Section`, and report needs the
-section-free form, so `style.rs` gains that mapping.
+`style::Palette::state` is that section-free mapping.
 
 The diff is the one part the report does not paint itself. With colour on it is
 requested from git with `--color=always`; with colour off, `--no-color`. That
@@ -417,8 +450,9 @@ Pure (`src/report.rs`, `src/date.rs`):
   invalid string, and an injected `today` so the tests never read the clock.
 - Grouping by day, dossier order taken from an entry, the name-ascending
   fallback when the entry is missing, duplicate day headings, sealed sources
-  included, `--no-diff`, the fold markers, the first-appearance order of the
-  diff blocks, and CRLF.
+  included, `--no-diff`, the fold markers, the computed fence (a diff holding a
+  fence line of its own keeps it inside the block), the first-appearance order
+  of the diff blocks, and CRLF.
 - Colour: a terminal run hues each marker by state; a pipe / `NO_COLOR` /
   `TERM=dumb` prints byte-for-byte the plain report. The diff body is passed
   through exactly as git emits it, so with colour on it carries git's red and

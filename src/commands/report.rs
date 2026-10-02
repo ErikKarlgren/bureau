@@ -296,13 +296,16 @@ mod tests {
 
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(
-            output.contains("Report from 2026-09-01 to 2026-09-30"),
+            output.contains("# Report from 2026-09-01 to 2026-09-30"),
             "{output}"
         );
         assert!(output.contains("## 2026-09-20"), "{output}");
         assert!(output.contains("- [ ] buy shampoo"), "{output}");
         assert!(output.contains("### A\n- did A"), "{output}");
-        assert!(output.contains("{{{ A\ndiff of "), "{output}");
+        assert!(
+            output.contains("{{{ git diff\n```diff\ndiff of "),
+            "{output}"
+        );
     }
 
     #[test]
@@ -353,7 +356,7 @@ mod tests {
         assert!(!called.get(), "the differ was asked for a diff");
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(output.contains("### A"), "{output}");
-        assert!(!output.contains("# Git diff"), "{output}");
+        assert!(!output.contains("Complete git diff"), "{output}");
     }
 
     #[test]
@@ -377,7 +380,7 @@ mod tests {
             "{warnings:?}"
         );
         assert!(output.contains("### A"), "{output}");
-        assert!(!output.contains("# Git diff"), "{output}");
+        assert!(!output.contains("Complete git diff"), "{output}");
     }
 
     /// `run_in` with the test's differ and picker, so a test only spells out
@@ -490,7 +493,7 @@ mod tests {
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(output.contains("### A\n- did A"), "{output}");
         assert!(
-            output.contains("## 2026-09-21\n\n(Entry exists but no work was found)"),
+            output.contains("## 2026-09-21\n(No work found)"),
             "{output}"
         );
     }
@@ -505,7 +508,7 @@ mod tests {
         let (output, _) = run_report(&scratch, &args).unwrap();
 
         assert!(output.contains("### A"), "{output}");
-        assert!(!output.contains("Entry exists"), "{output}");
+        assert!(!output.contains("No work found"), "{output}");
     }
 
     #[test]
@@ -602,9 +605,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(
-            output.contains("Report from 2026-09-20 to 2026-09-20"),
-            "{output}"
-        );
+        assert!(output.contains("# Report for 2026-09-20"), "{output}");
+        assert!(!output.contains(" to "), "{output}");
     }
 }

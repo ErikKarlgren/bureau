@@ -47,4 +47,27 @@
       choosing the output shape is the work. General features come first, so
       this is not a priority.
 
+- [ ] `bureau report` colour: it currently hues entry and worklog task markers by
+      state, which is `tasks`' meaning, not the report's -- in a report the task
+      state is not what matters, the structure is. Reconsider making colour say
+      where you are (title, days, dossiers, the `(No work found)` note) and
+      leaving the notes verbatim. If that lands, `Palette::state` and the
+      palette parameter on `Tree::render_all` exist only for the report and can
+      go with it.
+- [ ] `bureau report` diff size: a dossier created in the period diffs as its
+      whole file, so `## Complete git diff` can dwarf the daily work that is the
+      report's point. Consider a per-dossier `--numstat` line and a
+      `--diff=full|stat|none` switch, or `--no-diff` plus `--stat`.
+- [ ] `bureau report`: a dossier with worklog lines but no commit in the period,
+      or one whose diff failed, is simply absent from the diff section; the
+      failure is a stderr warning, which a redirected report loses. Print
+      `(no committed changes)` / `(diff unavailable)` in the document instead.
+- [ ] `bureau report`: an entry's `## Notes` and `## Worked on Tasks` headings
+      are flattened into one bullet list under the day, so the reader cannot
+      tell notes from task references. Mirror the entry's own headings as `###`
+      blocks when that context turns out to matter.
+- [ ] `bureau report --brief`: one line per day, for a standup or a CV, with the
+      full report left as the appendix. Also `--group dossier`, a dossier-major
+      view that matches the diff half's order.
+
 ## Current features
