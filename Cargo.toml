@@ -31,4 +31,6 @@ string_slice = "deny"
 panic_in_result_fn = "deny"
 panic = "deny"
 exit = "deny"
+# Only converting enums to their representation is OK. You will need to enable
+# this on a per-case basis
 as_conversions = "deny"
