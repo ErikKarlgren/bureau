@@ -41,8 +41,8 @@ pub struct DiffRequest {
 /// # Errors
 ///
 /// Fails when the repository root cannot be found, when a date cannot be read,
-/// when the filter matches nothing, when the picker is cancelled, or when there
-/// is no work in the period.
+/// when the filter matches nothing, when the picker is cancelled, or when the
+/// report would hold no work at all.
 pub fn run(args: &ReportArgs) -> Result<()> {
     let root = git::toplevel()?;
     let today = Local::now().date_naive();
@@ -163,8 +163,11 @@ fn run_in(
         entries,
     };
     let days = report::days(&input, palette);
-    if days.is_empty() {
-        bail!("no work in the period {from} to {to}");
+    if !report::has_work(&days) {
+        bail!(
+            "{}",
+            report::nothing_to_report(from, to, selected.is_some(), !input.entries.is_empty())
+        );
     }
 
     let mut diffs = Vec::new();
@@ -377,22 +380,149 @@ mod tests {
         assert!(!output.contains("# Git diff"), "{output}");
     }
 
-    #[test]
-    fn no_work_in_the_period_is_an_error() {
-        let scratch = Scratch::new("report-empty").unwrap();
-
-        let error = run_in(
+    /// `run_in` with the test's differ and picker, so a test only spells out
+    /// what makes it different.
+    fn run_report(scratch: &Scratch, args: &ReportArgs) -> Result<(String, Vec<String>)> {
+        run_in(
             scratch.path(),
-            &args(),
+            args,
             Palette::OFF,
             today(),
             named(),
             no_picker,
         )
-        .unwrap_err();
+    }
+
+    #[test]
+    fn no_entries_in_the_period_is_an_error() {
+        let scratch = Scratch::new("report-empty").unwrap();
+
+        let error = run_report(&scratch, &args()).unwrap_err();
 
         assert!(
-            error.to_string().contains("no work in the period"),
+            error
+                .to_string()
+                .contains("No entries found from 2026-09-01 to 2026-09-30"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_single_day_with_no_entry_names_the_day() {
+        let scratch = Scratch::new("report-empty-day").unwrap();
+        let mut args = args();
+        args.from = None;
+        args.to = None;
+        args.date = Some("2026-09-20".to_owned());
+
+        let error = run_report(&scratch, &args).unwrap_err();
+
+        assert!(
+            error.to_string().contains("No entry found for 2026-09-20"),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("period"), "{error}");
+    }
+
+    #[test]
+    fn a_period_whose_entries_are_all_workless_is_an_error() {
+        let scratch = Scratch::new("report-entries-empty").unwrap();
+        scratch
+            .write("entries/2026-09-20.md", "# 2026-09-20\n\n## Notes\n- \n")
+            .unwrap();
+
+        let error = run_report(&scratch, &args()).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("All entries from 2026-09-01 to 2026-09-30 contain no work"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_single_workless_entry_names_the_entry() {
+        let scratch = Scratch::new("report-entry-empty").unwrap();
+        scratch
+            .write("entries/2026-09-20.md", "# 2026-09-20\n\n## Notes\n- \n")
+            .unwrap();
+        let mut args = args();
+        args.from = None;
+        args.to = None;
+        args.date = Some("2026-09-20".to_owned());
+
+        let error = run_report(&scratch, &args).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Entry found for 2026-09-20 but no work found"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_one_day_range_uses_the_single_day_wording() {
+        let scratch = Scratch::new("report-one-day-empty").unwrap();
+        let mut args = args();
+        args.from = Some("2026-09-20".to_owned());
+        args.to = Some("2026-09-20".to_owned());
+
+        let error = run_report(&scratch, &args).unwrap_err();
+
+        assert!(
+            error.to_string().contains("No entry found for 2026-09-20"),
+            "{error}"
+        );
+        assert!(!error.to_string().contains("period"), "{error}");
+    }
+
+    #[test]
+    fn a_workless_entry_is_printed_beside_a_day_that_has_work() {
+        let scratch = with_dossier("report-mixed");
+        scratch
+            .write("entries/2026-09-21.md", "# 2026-09-21\n\n## Notes\n- \n")
+            .unwrap();
+
+        let (output, warnings) = run_report(&scratch, &args()).unwrap();
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(output.contains("### A\n- did A"), "{output}");
+        assert!(
+            output.contains("## 2026-09-21\n\n(Entry exists but no work was found)"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn a_worklog_day_without_an_entry_is_a_report() {
+        let scratch = with_dossier("report-no-entry");
+        let mut args = args();
+        args.from = Some("2026-09-20".to_owned());
+        args.to = Some("2026-09-20".to_owned());
+
+        let (output, _) = run_report(&scratch, &args).unwrap();
+
+        assert!(output.contains("### A"), "{output}");
+        assert!(!output.contains("Entry exists"), "{output}");
+    }
+
+    #[test]
+    fn a_filtered_report_keeps_the_no_work_wording() {
+        let scratch = Scratch::new("report-filter-empty").unwrap();
+        scratch
+            .write("dossiers/A.md", "# A\n\n## Worklog\n")
+            .unwrap();
+        let mut args = args();
+        args.filter = Some("A".to_owned());
+
+        let error = run_report(&scratch, &args).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("no work in the period 2026-09-01 to 2026-09-30"),
             "{error}"
         );
     }

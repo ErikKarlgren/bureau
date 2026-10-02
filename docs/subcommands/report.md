@@ -44,8 +44,14 @@ Rules:
 
 - `<date>` and `--from`/`--to` are mutually exclusive; clap enforces it.
 - `--from` later than `--to` is an error.
-- **No work in the period is an error** (exit 1), not an empty report. A
-  period with work logs but no diff is not an error.
+- **A report with no work at all is an error** (exit 1), not an empty report. An
+  unfiltered report names what is missing: `No entry found for <date>` /
+  `No entries found from <from> to <to>` when the period has no entry file, and
+  `Entry found for <date> but no work found` / `All entries from <from> to
+  <to> contain no work` when it has entries but nothing in them. A `--filter`ed
+  report never reads entries, so it keeps the older wording: `no work in
+  <date>` / `no work in the period <from> to <to>`. A range with work but no
+  diff is not an error.
 - `--filter` matching nothing is an error; matching several opens the picker,
   as it does everywhere else. Reuse `commands/selection.rs` rather than
   re-deciding.
@@ -128,8 +134,25 @@ vocabulary ever outgrows a closed grammar.
 
 The period is a set of **calendar days**. A day is in the report when
 
-- a dossier's `## Worklog` has a `### <date>` heading in the period, or
-- that day's entry has content.
+- a dossier's `## Worklog` has a `### <date>` heading in the period whose block
+  holds at least one line, or
+- that day has an entry file.
+
+A day's **work** is what it renders: the entry's bullets, or the `###` blocks of
+the dossiers that logged work that day. A day can be in the report and have no
+work -- an entry holding nothing but prose, or nothing at all -- and the report
+names that case rather than dropping the day.
+
+The dossier worklog can be a day's only source. `bureau worklog --date <date>`
+creates the day's entry when it is missing, so a day that was logged through the
+tool always has one to inspect; but a worklog written by hand, or one whose
+entry was deleted afterwards, still reports on its own, and is never an error
+about a missing entry.
+
+An entry that renders no bullets still makes the day. In a period that has work
+in it, such a day prints its heading followed by `(Entry exists but no work was
+found)` rather than a bare heading. A day whose only trace is an empty
+`### date` heading -- no entry, no worklog lines -- is left out entirely.
 
 Git time does not define the period. This matters because
 `bureau worklog --date` exists precisely to **backfill**: a line dated three
@@ -173,6 +196,10 @@ Report from 2026-09-20 to 2026-10-01
 ### 1234 - killing goblins was never an option
 - got a magical wand
 
+## 2026-09-22
+
+(Entry exists but no work was found)
+
 # Git diff
 
 {{{ 1234 - killing goblins was never an option
@@ -199,8 +226,10 @@ Shape rules:
   ascending. A day with no entry file at all (a backfilled worklog) is
   name ascending throughout. This reproduces a chronological-ish order without
   inventing a second authority.
-- Days with **no work are omitted** entirely; the report is about work, not
-  absence.
+- A day with no worklog lines and no entry file is not in the report at all. A
+  day whose entry renders no bullets prints its heading and then
+  `(Entry exists but no work was found)`. The note is entry-only: a day that is
+  in the report for its dossier worklogs alone never carries it.
 - `# Git diff` is last, so `--no-diff` leaves a complete, self-contained daily
   document. Its blocks follow **first appearance in the period** (the order the
   dossiers first show up in `# Daily work`), ties broken by name.
@@ -313,7 +342,16 @@ printed. To keep that true:
   *action*, not out of *history*: a dossier sealed during the period is exactly
   what the report should show. `sources::read_dossiers` drops sealed files, so
   the report reads `read_markdown` and keeps sealed sources.
-- **No work in the period:** error, per Usage.
+- **No work at all in the range:** an error, named by what is missing. An
+  unfiltered report says `No entry found for <date>` / `No entries found from
+  <from> to <to>` when there is no entry file in the period, and `Entry found
+  for <date> but no work found` / `All entries from <from> to <to> contain no
+  work` when there are entries but nothing in them. A `--filter`ed report says
+  `no work in <date>` / `no work in the period <from> to <to>`, because it
+  never reads entries. A one-day period is named as a day even when it was
+  asked for with `--from`/`--to`.
+- **A period with some work in it:** its workless entry days are printed with
+  `(Entry exists but no work was found)`, not dropped and not an error.
 - **`--no-diff`:** the `# Git diff` heading is not printed at all (not an
   empty heading).
 
@@ -390,8 +428,14 @@ Pure (`src/report.rs`, `src/date.rs`):
 
 Command (`src/commands/report.rs`):
 
-- No work in the period is an error; a missing `entries/` or `dossiers/`
-  directory is not.
+- The four no-work messages, one test each, for a single day and for a range:
+  no entry file, and entry files holding no work. Also that a one-day
+  `--from`/`--to` period is named as a day, and that a `--filter`ed report
+  keeps the `no work` wording.
+- A worklog day with no entry reports on its own; a workless entry prints the
+  note beside a day that has work; a worklog heading with nothing under it
+  makes no day at all. A missing `entries/` or `dossiers/` directory is not an
+  error.
 - The differ is **injected into `run_in`**, the way the picker and the prompt
   are, so command tests supply placeholders instead of calling git and do not
   depend on the installed git version. Useful fakes, as plain closures: one

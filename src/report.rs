@@ -40,6 +40,8 @@ pub struct Input {
 pub struct Day {
     /// The day.
     pub date: NaiveDate,
+    /// Whether the day has an entry file, whatever it holds.
+    pub has_entry: bool,
     /// The day's own notes, already rendered.
     pub entry: Vec<String>,
     /// Each dossier worked on that day, in the order it should print, with its
@@ -49,10 +51,12 @@ pub struct Day {
 
 /// Build the report's days, oldest first.
 ///
-/// A day is in the report when a dossier logged work on it or its entry has
-/// bullets; a day with neither is dropped. Duplicate `### date` headings in one
-/// dossier are merged in document order, and a dossier whose day has nothing to
-/// print is left out rather than given an empty heading.
+/// A day is in the report when it has an entry file or a dossier logged work
+/// on it. An entry that renders no bullets still makes the day -- with no work
+/// in it, which the report says out loud rather than printing a bare heading.
+/// Duplicate `### date` headings in one dossier are merged in document order,
+/// and a dossier or a day whose worklog holds nothing to print is left out
+/// rather than given an empty heading.
 #[must_use]
 pub fn days(input: &Input, palette: Palette) -> Vec<Day> {
     let mut blocks: BTreeMap<NaiveDate, BTreeMap<usize, String>> = BTreeMap::new();
@@ -82,6 +86,7 @@ pub fn days(input: &Input, palette: Palette) -> Vec<Day> {
     let mut days = Vec::new();
     for date in dates {
         let entry_source = input.entries.get(&date);
+        let has_entry = entry_source.is_some();
         let entry = entry_source.map_or_else(Vec::new, |content| {
             Tree::parse(&worklog::without_links(content)).render_all(palette)
         });
@@ -106,12 +111,16 @@ pub fn days(input: &Input, palette: Palette) -> Vec<Day> {
             })
             .collect();
 
-        if entry.is_empty() && dossiers.is_empty() {
+        // An entry day stays even when it has nothing to print: the report
+        // names it rather than dropping it. A day that exists only as an empty
+        // `### date` heading in a dossier has nothing to say and is left out.
+        if !has_entry && dossiers.is_empty() {
             continue;
         }
 
         days.push(Day {
             date,
+            has_entry,
             entry,
             dossiers,
         });
@@ -153,6 +162,12 @@ pub fn render(from: NaiveDate, to: NaiveDate, days: &[Day], diffs: &[(String, St
         lines.push(String::new());
         lines.push(format!("## {}", day.date));
 
+        if day.has_entry && day.entry.is_empty() && day.dossiers.is_empty() {
+            lines.push(String::new());
+            lines.push(String::from("(Entry exists but no work was found)"));
+            continue;
+        }
+
         if !day.entry.is_empty() {
             lines.push(String::new());
             lines.extend(day.entry.iter().cloned());
@@ -180,6 +195,47 @@ pub fn render(from: NaiveDate, to: NaiveDate, days: &[Day], diffs: &[(String, St
     let mut output = lines.join("\n");
     output.push('\n');
     output
+}
+
+/// Whether any day has anything to print.
+///
+/// A day can be in the report and still be empty: an entry file with no
+/// bullets and no dossier worklog is a day the report names and nothing more.
+/// This is what tells such a day apart from a period with work in it.
+#[must_use]
+pub fn has_work(days: &[Day]) -> bool {
+    days.iter()
+        .any(|day| !day.entry.is_empty() || !day.dossiers.is_empty())
+}
+
+/// Why a report with no work at all is an error, worded for how it was asked.
+///
+/// An unfiltered report reads the entries, so it can tell "you never wrote an
+/// entry" from "the entry you wrote holds no work". A filtered report never
+/// reads them -- it is about one dossier -- so it says only that there is no
+/// work, and never mentions entries it did not look at. A one-day period is
+/// named as a day however it was asked for, `--from`/`--to` included.
+#[must_use]
+pub fn nothing_to_report(
+    from: NaiveDate,
+    to: NaiveDate,
+    filtered: bool,
+    any_entry: bool,
+) -> String {
+    if filtered {
+        return if from == to {
+            format!("no work in {from}")
+        } else {
+            format!("no work in the period {from} to {to}")
+        };
+    }
+
+    match (from == to, any_entry) {
+        (true, true) => format!("Entry found for {from} but no work found"),
+        (true, false) => format!("No entry found for {from}"),
+        (false, true) => format!("All entries from {from} to {to} contain no work"),
+        (false, false) => format!("No entries found from {from} to {to}"),
+    }
 }
 
 /// One day's dossier indices, in the order they print.
@@ -352,11 +408,98 @@ mod tests {
     }
 
     #[test]
-    fn a_day_with_nothing_to_print_is_dropped() {
+    fn an_entry_alone_still_makes_a_day() {
+        let first = date(2026, 9, 20);
         let built = input(
             vec![dossier("A", &[])],
-            &[(date(2026, 9, 20), "# 2026-09-20\n")],
+            &[(first, "# 2026-09-20\n\n## Notes\n- \n")],
         );
+
+        let days = days(&built, Palette::OFF);
+
+        assert_eq!(days.len(), 1);
+        assert_eq!(days.first().unwrap().date, first);
+        assert!(days.first().unwrap().has_entry);
+        assert!(days.first().unwrap().entry.is_empty());
+        assert!(days.first().unwrap().dossiers.is_empty());
+        assert!(!has_work(&days));
+    }
+
+    #[test]
+    fn a_worklog_heading_with_nothing_under_it_makes_no_day() {
+        let built = input(vec![dossier("A", &[(date(2026, 9, 20), "")])], &[]);
+
+        assert!(days(&built, Palette::OFF).is_empty());
+    }
+
+    #[test]
+    fn an_entry_with_no_work_is_named_in_the_report() {
+        let built = input(
+            vec![],
+            &[(date(2026, 9, 20), "# 2026-09-20\n\n## Notes\n- \n")],
+        );
+        let days = days(&built, Palette::OFF);
+
+        let output = render(built.from, built.to, &days, &[]);
+
+        assert!(
+            output.contains("## 2026-09-20\n\n(Entry exists but no work was found)\n"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn a_worklog_day_without_an_entry_is_left_unremarked() {
+        let first = date(2026, 9, 20);
+        let built = input(vec![dossier("A", &[(first, "- did A\n")])], &[]);
+        let days = days(&built, Palette::OFF);
+
+        assert!(has_work(&days));
+        let output = render(built.from, built.to, &days, &[]);
+        assert!(!output.contains("Entry exists"), "{output}");
+    }
+
+    #[test]
+    fn names_what_a_report_with_no_work_is_missing() {
+        let from = date(2026, 9, 1);
+        let to = date(2026, 9, 30);
+
+        assert_eq!(
+            nothing_to_report(from, to, false, false),
+            "No entries found from 2026-09-01 to 2026-09-30"
+        );
+        assert_eq!(
+            nothing_to_report(from, to, false, true),
+            "All entries from 2026-09-01 to 2026-09-30 contain no work"
+        );
+        assert_eq!(
+            nothing_to_report(from, from, false, false),
+            "No entry found for 2026-09-01"
+        );
+        assert_eq!(
+            nothing_to_report(from, from, false, true),
+            "Entry found for 2026-09-01 but no work found"
+        );
+    }
+
+    #[test]
+    fn a_filtered_report_never_mentions_entries() {
+        let from = date(2026, 9, 1);
+        let to = date(2026, 9, 30);
+
+        assert_eq!(
+            nothing_to_report(from, to, true, true),
+            "no work in the period 2026-09-01 to 2026-09-30"
+        );
+        assert_eq!(
+            nothing_to_report(from, from, true, true),
+            "no work in 2026-09-01"
+        );
+    }
+
+    #[test]
+    fn a_period_with_no_notes_at_all_has_no_days() {
+        let built = input(vec![dossier("A", &[])], &[]);
 
         assert!(days(&built, Palette::OFF).is_empty());
     }
