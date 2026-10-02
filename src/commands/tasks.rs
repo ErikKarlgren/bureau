@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use chrono::NaiveDate;
 
 use crate::cli::{Filter, TasksArgs};
-use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
+use crate::commands::paths::ENTRIES_DIR;
 use crate::commands::selection::{self, Request};
 use crate::commands::sources;
 use crate::git;
@@ -27,9 +27,10 @@ const NOTHING_ACTIONABLE: &str = "No actionable tasks";
 ///
 /// # Errors
 ///
-/// Fails when the repository root cannot be found, when a filter matches
-/// nothing or is cancelled at the picker, or when a note cannot be read.
-/// Nothing is written either way: this command only reports.
+/// Fails when the repository root cannot be found, or when a filter matches
+/// nothing or is cancelled at the picker. A note that cannot be read is
+/// skipped with a warning rather than failing the run. Nothing is written
+/// either way: this command only reports.
 pub fn run(args: &TasksArgs) -> Result<()> {
     let root = git::toplevel()?;
     println!(
@@ -58,17 +59,14 @@ fn run_in(
     let scope = if args.all { Scope::All } else { Scope::Actions };
 
     let selected = if request.menu || args.filter.is_some() {
-        let chosen = selection::select(
-            &sources::open_paths(&sources::read_markdown(root, DOSSIERS_DIR)?),
+        // `read_dossiers` rather than the raw listing: the picker should offer
+        // dossiers in the same order, and with the same sealed ones dropped,
+        // as the unfiltered listing and `worklog` do.
+        Some(selection::select(
+            &sources::read_dossiers(root)?,
             request,
             picker,
-        )?;
-        Some(
-            chosen
-                .into_iter()
-                .next()
-                .context("the selection returned no dossier")?,
-        )
+        )?)
     } else {
         None
     };
@@ -95,6 +93,18 @@ fn render_all(
     scope: Scope,
     palette: Palette,
 ) -> Result<String> {
+    // Read and parse every source once, then draw each section from the same
+    // trees: rendering section by section would read and parse a dossier once
+    // per section.
+    let entry_notes: Vec<Note> = entries
+        .iter()
+        .map(|entry| Note::read(&entry.path, &entry.heading, palette))
+        .collect::<Result<_>>()?;
+    let dossier_notes: Vec<Note> = dossiers
+        .iter()
+        .map(|dossier| Note::read(dossier, &crate::worklog::stem(dossier), palette))
+        .collect::<Result<_>>()?;
+
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
 
     for &section in scope.sections() {
@@ -106,15 +116,12 @@ fn render_all(
         // dossiers only, which is why the two loops are not the same shape --
         // the wider `BLOCKED` that `--all` asks for covers both.
         if section != Section::Finished {
-            for entry in entries {
-                let shown = source_lines(&entry.path, &entry.heading, section, scope, palette)?;
-                push_source(&mut lines, shown);
+            for note in &entry_notes {
+                push_source(&mut lines, note.lines(section, scope, palette));
             }
         }
-        for dossier in dossiers {
-            let heading = crate::worklog::stem(dossier);
-            let shown = source_lines(dossier, &heading, section, scope, palette)?;
-            push_source(&mut lines, shown);
+        for note in &dossier_notes {
+            push_source(&mut lines, note.lines(section, scope, palette));
         }
 
         if !lines.is_empty() {
@@ -127,11 +134,11 @@ fn render_all(
 
 /// The one dossier a filtered run prints.
 fn render_one(path: &Path, scope: Scope, palette: Palette) -> Result<String> {
-    let heading = crate::worklog::stem(path);
+    let note = Note::read(path, &crate::worklog::stem(path), palette)?;
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
 
     for &section in scope.sections() {
-        let lines = source_lines(path, &heading, section, scope, palette)?;
+        let lines = note.lines(section, scope, palette);
         if !lines.is_empty() {
             sections.push((section, lines));
         }
@@ -164,28 +171,52 @@ fn assemble(sections: &[(Section, Vec<String>)], palette: Palette) -> String {
         blocks.push(block);
     }
 
-    blocks.join("\n\n")
-}
+    let mut listing = blocks.join("\n\n");
 
-/// One source's lines for one section, under its heading.
-fn source_lines(
-    path: &Path,
-    heading: &str,
-    section: Section,
-    scope: Scope,
-    palette: Palette,
-) -> Result<Vec<String>> {
-    let contents =
-        fs::read_to_string(path).with_context(|| format!("could not read '{}'", path.display()))?;
-
-    let lines = Tree::parse(&contents).render(section, scope, palette);
-    if lines.is_empty() {
-        return Ok(lines);
+    // Every block ends with the newline of its last line, and `run` prints the
+    // listing with `println!`, which is what supplies the one line ending the
+    // output should have. Dropping the block's own keeps a blank line from
+    // appearing after the last task -- and keeps this path and the empty one
+    // ending the same way.
+    if listing.ends_with('\n') {
+        listing.pop();
     }
 
-    let mut shown = vec![palette.heading().paint(&format!("# {heading}"))];
-    shown.extend(lines);
-    Ok(shown)
+    listing
+}
+
+/// One note, read and parsed once so every section draws from the same tree.
+struct Note {
+    /// The heading as it prints, already painted.
+    heading: String,
+    /// Everything the file has to say about tasks.
+    tree: Tree,
+}
+
+impl Note {
+    /// Read `path` as a note titled `heading`.
+    fn read(path: &Path, heading: &str, palette: Palette) -> Result<Self> {
+        let contents = fs::read_to_string(path)
+            .with_context(|| format!("could not read '{}'", path.display()))?;
+
+        Ok(Self {
+            heading: palette.heading().paint(&format!("# {heading}")),
+            tree: Tree::parse(&contents),
+        })
+    }
+
+    /// The lines this note prints in `section`, empty when it prints none.
+    fn lines(&self, section: Section, scope: Scope, palette: Palette) -> Vec<String> {
+        let lines = self.tree.render(section, scope, palette);
+        if lines.is_empty() {
+            return lines;
+        }
+
+        let mut shown = Vec::with_capacity(lines.len().saturating_add(1));
+        shown.push(self.heading.clone());
+        shown.extend(lines);
+        shown
+    }
 }
 
 /// Append one source's block to a section, set off from the block before it.
@@ -342,7 +373,9 @@ mod tests {
         let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
 
         // The whole listing, so the gap against the rule and the gap between
-        // two sections are both pinned rather than sampled.
+        // two sections are both pinned rather than sampled. No trailing
+        // newline: `run` prints this with `println!`, and a second one would
+        // leave a blank line after the last task.
         assert_eq!(
             out,
             "\
@@ -358,8 +391,7 @@ mod tests {
 # 1234 - refactor auth
 - [o] Split auth.rs
   - [?] API: waiting on John
-- [x] Create tests
-"
+- [x] Create tests"
         );
     }
 
@@ -479,6 +511,19 @@ mod tests {
     }
 
     #[test]
+    fn an_unreadable_note_is_skipped_not_fatal() {
+        let scratch = with_dossier("tasks-unreadable");
+        // A directory that ends in `.md` passes the extension check and then
+        // fails to read; one like it must not hide the dossiers that are fine.
+        fs::create_dir_all(scratch.path().join("dossiers/broken.md")).unwrap();
+
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+
+        assert!(out.contains("# 1234 - refactor auth"), "{out}");
+        assert!(!out.contains("broken.md"), "{out}");
+    }
+
+    #[test]
     fn lists_a_sealed_dossier_nowhere() {
         let scratch = Scratch::new("tasks-sealed").unwrap();
         scratch
@@ -575,6 +620,41 @@ mod tests {
     }
 
     #[test]
+    fn the_menu_offers_dossiers_most_recently_modified_first() {
+        let scratch = with_dossier("tasks-menu-order");
+        scratch
+            .write("dossiers/5 - other.md", "- [ ] Elsewhere\n")
+            .unwrap();
+        let now = SystemTime::now();
+        set_modified(
+            &scratch.path().join("dossiers/1234 - refactor auth.md"),
+            now,
+        );
+        set_modified(
+            &scratch.path().join("dossiers/5 - other.md"),
+            now - Duration::from_secs(600),
+        );
+
+        // The picker is handed the same sorted list the listing prints, not
+        // whatever order the filesystem happens to hand back.
+        let picked = |candidates: &[PathBuf]| {
+            assert_eq!(candidates.len(), 2, "both dossiers should be offered");
+            let first = candidates.first().context("there was nothing to pick")?;
+            assert_eq!(crate::worklog::stem(first), "1234 - refactor auth");
+
+            Ok(first.clone())
+        };
+        let menu = TasksArgs {
+            filter: None,
+            menu: true,
+            all: false,
+        };
+        let out = run_in(scratch.path(), &menu, Palette::OFF, picked).unwrap();
+
+        assert!(out.contains("# 1234 - refactor auth"), "{out}");
+    }
+
+    #[test]
     fn a_finished_entry_task_is_printed_nowhere() {
         let scratch = with_dossier("tasks-entry-finished");
         scratch
@@ -610,7 +690,7 @@ mod tests {
         );
 
         let out = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
-        assert!(out.contains("# 1 - done\n- [x] All over\n"), "{out}");
+        assert!(out.contains("# 1 - done\n- [x] All over"), "{out}");
     }
 
     #[test]
@@ -627,8 +707,9 @@ mod tests {
         };
         let out = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap();
 
-        // One dossier, one section: the rule sits against it.
-        assert_eq!(out, "=== ACTIONABLE ===\n# 2 - other\n- [ ] Elsewhere\n");
+        // One dossier, one section: the rule sits against it, and the listing
+        // carries no trailing newline of its own.
+        assert_eq!(out, "=== ACTIONABLE ===\n# 2 - other\n- [ ] Elsewhere");
         assert!(!out.contains("refactor auth"), "{out}");
     }
 

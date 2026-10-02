@@ -340,8 +340,7 @@ impl Tree {
         lines
     }
 
-    /// Print one node and whatever below it belongs to `section`, returning
-    /// whether anything was printed.
+    /// Print one node and whatever below it belongs to `section`.
     ///
     /// A node prints when it belongs to the section, or when it is on the way
     /// down to a node that does.
@@ -353,13 +352,13 @@ impl Tree {
         palette: Palette,
         depth: usize,
         lines: &mut Vec<String>,
-    ) -> bool {
+    ) {
         let Some(current) = self.nodes.get(node) else {
-            return false;
+            return;
         };
 
         if !self.leads_to_a_match(node, section, scope) {
-            return false;
+            return;
         }
 
         // Whatever the children print goes under this line, so note where
@@ -379,8 +378,6 @@ impl Tree {
             first,
             indent(&render_bullet(current, section, palette), depth),
         );
-
-        true
     }
 
     /// Whether `node` prints in `section`: either it belongs there, or it is
@@ -438,9 +435,17 @@ struct Bullet {
 /// The bullet a line is, and how far it is indented, or `None` when the line
 /// is not a bullet at all.
 fn parse_line(line: &str) -> Option<(Bullet, usize)> {
-    let (indent, rest) = split_whitespace(line);
+    let (indent, rest) = split_indent(line);
     let tail = rest.strip_prefix('-')?;
-    Some((parse_bullet(tail), columns(indent)))
+    let bullet = parse_bullet(tail);
+
+    // A dash with nothing after it is not a bullet: it has no marker and no
+    // text, so it would only ever print as the empty parent of a task.
+    if bullet.marker.is_none() && bullet.text.is_empty() {
+        return None;
+    }
+
+    Some((bullet, columns(indent)))
 }
 
 /// How many columns of indentation `whitespace` is, a tab advancing to the
@@ -473,7 +478,7 @@ const fn next_tab_stop(column: usize) -> usize {
 /// `CommonMark` on purpose: a note that a stricter reader would render as a
 /// paragraph is still a task here, because the user wrote a marker on it.
 fn parse_bullet(tail: &str) -> Bullet {
-    let (_, rest) = split_whitespace(tail);
+    let (_, rest) = split_indent(tail);
 
     match marker(rest) {
         Some((state, text)) => Bullet {
@@ -510,7 +515,7 @@ fn marker(rest: &str) -> Option<(State, &str)> {
 }
 
 /// `text` split into its leading whitespace and the rest.
-fn split_whitespace(text: &str) -> (&str, &str) {
+fn split_indent(text: &str) -> (&str, &str) {
     text.find(|character: char| !character.is_ascii_whitespace())
         .map_or((text, ""), |start| text.split_at(start))
 }
@@ -662,6 +667,16 @@ mod tests {
     #[test]
     fn a_bare_dash_is_nothing() {
         assert!(rendered("-\n", Section::Actionable).is_empty());
+        assert!(rendered("-   \n", Section::Actionable).is_empty());
+    }
+
+    #[test]
+    fn a_bare_dash_does_not_parent_a_task() {
+        // The dash is ignored like any other non-bullet line, so the task
+        // under it is a root rather than a child of nothing.
+        let content = "-\n  - [ ] A\n";
+
+        assert_eq!(rendered(content, Section::Actionable), lines(&["- [ ] A"]));
     }
 
     #[test]

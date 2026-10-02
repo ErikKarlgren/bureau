@@ -13,8 +13,10 @@ pub const CANCEL_HINT: &str = "Esc or q to cancel";
 
 /// What the user asked for, in terms the selection can act on.
 ///
-/// There is no "was a filter given" field, because a request only reaches
-/// [`select`] when one was: callers check that themselves before calling.
+/// Neither field set is not an error: it means "the most recently modified
+/// dossier", which is how `worklog` asks when it was given nothing to filter
+/// on. `--filter` and `--menu` are mutually exclusive on the command line, so
+/// a request built from arguments never has both set.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Request<'a> {
     /// The pattern dossier names must contain, when one was given.
@@ -26,9 +28,8 @@ pub struct Request<'a> {
 /// The `--filter` and `--menu` selection, for the commands that take both.
 ///
 /// A filter that matches several candidates asks which one, a filter that
-/// matches one is used as it is, and `--menu` asks over everything. Callers
-/// only reach this when one of those two was given: listing everything, or
-/// taking the newest, is their own business.
+/// matches one is used as it is, and `--menu` asks over everything. With
+/// neither, the most recently modified dossier wins, and a tie asks which one.
 ///
 /// The picker is handed in so a test can decide without a terminal; callers
 /// pass [`pick`].
@@ -41,12 +42,12 @@ pub fn select(
     paths: &[PathBuf],
     request: Request<'_>,
     picker: impl Fn(&[PathBuf]) -> Result<PathBuf>,
-) -> Result<Vec<PathBuf>> {
+) -> Result<PathBuf> {
     if let Some(pattern) = request.pattern {
         return match worklog::matching(paths, pattern).as_slice() {
             [] => bail!("no dossier matches '{pattern}'"),
-            [only] => Ok(vec![only.clone()]),
-            several => Ok(vec![picker(several)?]),
+            [only] => Ok(only.clone()),
+            several => picker(several),
         };
     }
 
@@ -55,15 +56,15 @@ pub fn select(
     }
 
     if request.menu {
-        return Ok(vec![picker(paths)?]);
+        return picker(paths);
     }
 
-    // A filter with no pattern asks for the newest dossier. The picker opens
+    // Neither a pattern nor `--menu`: the newest dossier. The picker opens
     // only when several share that timestamp, which is the normal state of a
     // fresh clone.
     match newest(&by_recency(paths.to_vec())) {
-        [only] => Ok(vec![only.clone()]),
-        tied => Ok(vec![picker(tied)?]),
+        [only] => Ok(only.clone()),
+        tied => picker(tied),
     }
 }
 

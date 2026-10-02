@@ -29,8 +29,9 @@ committed.
 dossier's `## Worklog` section and links that dossier from the same day's entry.
 A filter matching several dossiers opens a picker; with no filter the most
 recently modified dossier wins, or the picker opens when several share the
-newest timestamp. `--date` logs against another day instead of today, which is
-how you backfill; it is the only way to do so.
+newest timestamp. `--menu` asks the picker over every dossier instead, and
+cannot be combined with a filter. `--date` logs against another day instead of
+today, which is how you backfill; it is the only way to do so.
 
 ## Workflow
 Keep a git repository for your notes and run bureau from a terminal inside it.
@@ -89,9 +90,9 @@ to give context — and plain text when it is piped or `NO_COLOR` is set. Tasks 
 a daily entry are listed under their date, oldest first, before the dossiers,
 which follow most recently modified first. `--filter [<pattern>]`
 narrows the listing to one dossier the same way `bureau worklog` picks one,
-`--menu` opens the picker, and sealed dossiers are never listed, not even with
-`--all`. The exact rules, output format and examples live in
-[`docs/subcommands/tasks.md`](docs/subcommands/tasks.md).
+`--menu` opens the picker over all of them instead, and sealed dossiers are
+never listed, not even with `--all`. The exact rules, output format and
+examples live in [`docs/subcommands/tasks.md`](docs/subcommands/tasks.md).
 
 ## License
 MIT. See [LICENSE](LICENSE).

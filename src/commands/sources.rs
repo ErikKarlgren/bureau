@@ -38,8 +38,9 @@ impl Source {
 ///
 /// # Errors
 ///
-/// Fails when the directory is there but cannot be read, or when a file
-/// cannot be read to check whether it is sealed.
+/// Fails when the directory is there but cannot be read. A file that cannot be
+/// read is skipped with a warning, so one unreadable note does not hide every
+/// other one.
 pub fn read_markdown(root: &Path, directory: &str) -> Result<Vec<Source>> {
     let directory = root.join(directory);
     let entries = match fs::read_dir(&directory) {
@@ -56,7 +57,13 @@ pub fn read_markdown(root: &Path, directory: &str) -> Result<Vec<Source>> {
             .with_context(|| format!("could not read '{}'", directory.display()))?
             .path();
         if path.extension().is_some_and(|extension| extension == "md") {
-            sources.push(source_of(path)?);
+            match source_of(path) {
+                Ok(source) => sources.push(source),
+                // A permission error, a broken symlink, a directory that
+                // happens to end in `.md`: one bad file must not cost the user
+                // the whole listing. Say what was skipped and carry on.
+                Err(error) => eprintln!("warning: {error:#}"),
+            }
         }
     }
 
@@ -132,8 +139,11 @@ fn modified(path: &Path) -> Option<SystemTime> {
 
 /// The paths sharing the newest modification time.
 ///
-/// A fresh `git clone` stamps every file with the same time, so this is often
-/// more than one dossier, and the caller asks instead of guessing.
+/// `paths` must already be sorted most recently modified first, as
+/// [`by_recency`] returns it: only a leading run of the slice can hold the
+/// newest stamp. A fresh `git clone` stamps every file with the same time, so
+/// this is often more than one dossier, and the caller asks instead of
+/// guessing.
 #[must_use]
 pub fn newest(paths: &[PathBuf]) -> &[PathBuf] {
     let Some(first) = paths.first() else {

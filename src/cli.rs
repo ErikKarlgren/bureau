@@ -54,8 +54,8 @@ pub struct WorklogArgs {
     #[arg(long, value_name = "YYYY-MM-DD")]
     pub date: Option<String>,
 
-    /// Choose a dossier from all of them
-    #[arg(long)]
+    /// Choose a dossier from all of them instead of filtering
+    #[arg(long, conflicts_with = "filter")]
     pub menu: bool,
 }
 
@@ -71,8 +71,8 @@ pub struct TasksArgs {
     )]
     pub filter: Option<Filter>,
 
-    /// Choose a dossier from all of them
-    #[arg(long)]
+    /// Choose a dossier from all of them instead of filtering
+    #[arg(long, conflicts_with = "filter")]
     pub menu: bool,
 
     /// Also list finished and cancelled dossier tasks
@@ -116,5 +116,50 @@ impl FromStr for Filter {
         } else {
             Self::Matching(value.to_owned())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parse arguments the way the process would, without a process.
+    fn parse(arguments: &[&str]) -> Result<Cli, clap::Error> {
+        let mut argv = vec!["bureau"];
+        argv.extend_from_slice(arguments);
+        Cli::try_parse_from(argv)
+    }
+
+    #[test]
+    fn a_filter_and_a_menu_together_are_rejected() {
+        // Both mean "pick a dossier"; letting one silently win is how
+        // `--filter PATTERN --menu` and `--filter --menu` came to disagree.
+        let cases: &[&[&str]] = &[
+            &["tasks", "--filter", "auth", "--menu"],
+            &["tasks", "--filter", "--menu"],
+            &["worklog", "auth", "--menu"],
+        ];
+
+        for &arguments in cases {
+            assert!(
+                parse(arguments).is_err(),
+                "{arguments:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn each_way_of_choosing_is_accepted_on_its_own() {
+        let cases: &[&[&str]] = &[
+            &["tasks", "--filter", "auth"],
+            &["tasks", "--filter"],
+            &["tasks", "--menu"],
+            &["worklog", "auth"],
+            &["worklog", "--menu"],
+        ];
+
+        for &arguments in cases {
+            assert!(parse(arguments).is_ok(), "{arguments:?} should be accepted");
+        }
     }
 }

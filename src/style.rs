@@ -68,9 +68,9 @@ pub struct Palette {
     waiting: Style,
     done: Style,
     /// A source heading, entry or dossier.
-    heading: Style,
+    heading_style: Style,
     /// Everything else printed: the lines that only lead to a task.
-    context: Style,
+    context_style: Style,
 }
 
 impl Palette {
@@ -83,8 +83,8 @@ impl Palette {
         started: Style::NONE,
         waiting: Style::NONE,
         done: Style::NONE,
-        heading: Style::NONE,
-        context: Style::NONE,
+        heading_style: Style::NONE,
+        context_style: Style::NONE,
     };
 
     /// Blue for what can be picked up, cyan for what has been started, yellow
@@ -97,8 +97,8 @@ impl Palette {
         started: CYAN,
         waiting: YELLOW,
         done: GREEN,
-        heading: BOLD,
-        context: DIM,
+        heading_style: BOLD,
+        context_style: DIM,
     };
 
     /// The style a section's rule is drawn in.
@@ -121,25 +121,36 @@ impl Palette {
     /// counts every task in it.
     #[must_use]
     pub const fn marker(self, section: Section, state: State) -> Option<Style> {
-        match (section, state) {
-            (Section::Actionable, State::Todo) => Some(self.todo),
-            (Section::Actionable, State::Doing | State::Almost) => Some(self.started),
-            (Section::Blocked, State::Waiting) => Some(self.waiting),
-            (Section::Finished, State::Done | State::Cancelled) => Some(self.done),
-            _ => None,
+        // Every state is spelled out per section rather than caught by a `_`
+        // arm: this table is the whole of the colour rule, and a new `State`
+        // should stop the build until somebody decides what it looks like.
+        match section {
+            Section::Actionable => match state {
+                State::Todo => Some(self.todo),
+                State::Doing | State::Almost => Some(self.started),
+                State::Waiting | State::Done | State::Cancelled => None,
+            },
+            Section::Blocked => match state {
+                State::Waiting => Some(self.waiting),
+                State::Todo | State::Doing | State::Almost | State::Done | State::Cancelled => None,
+            },
+            Section::Finished => match state {
+                State::Done | State::Cancelled => Some(self.done),
+                State::Todo | State::Doing | State::Almost | State::Waiting => None,
+            },
         }
     }
 
     /// The style a source heading is drawn in.
     #[must_use]
     pub const fn heading(self) -> Style {
-        self.heading
+        self.heading_style
     }
 
     /// The style a line that only leads to a task is drawn in.
     #[must_use]
     pub const fn context(self) -> Style {
-        self.context
+        self.context_style
     }
 }
 

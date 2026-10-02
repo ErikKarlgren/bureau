@@ -19,7 +19,7 @@ bureau tasks [--filter [<pattern>]] [--menu] [--all]
 | Argument | Meaning |
 |---|---|
 | `--filter [<pattern>]` | With no pattern: the most recently modified dossier. With a pattern: the dossier whose name contains it (case-insensitive). If several match, the same picker `worklog` uses opens. Entries are never included in a filtered run. The pattern is a separate argument, as in `--filter auth`; `--filter` on its own takes the newest dossier. |
-| `--menu` | Open that picker over every dossier, filter or not. |
+| `--menu` | Open that picker over every dossier instead of filtering. Cannot be combined with `--filter`: the two are mutually exclusive, and the parser rejects them together. |
 | `--all` | Widen the listing to the work there is nothing to do about: the `FINISHED` section, for dossiers only, and the tasks a `[?]` is holding up, in `BLOCKED`. |
 
 No arguments: every source, `ACTIONABLE` and `BLOCKED` only, with `BLOCKED`
@@ -35,13 +35,15 @@ carries over:
 | `bureau tasks` | every entry and every dossier |
 | `bureau tasks --filter` | the newest dossier by modification time; the picker when several share that timestamp |
 | `bureau tasks --filter auth` | the one dossier matching `auth`; the picker when several match |
-| `bureau tasks --filter auth --menu` | the picker over all dossiers |
 | `bureau tasks --menu` | the picker over all dossiers |
 
-`--filter <pattern>` that matches nothing is an error (`no dossier matches
-'<pattern>'`); `--filter` with no dossiers at all is an error too. Every other
-outcome, including "the selection has no tasks", prints a message and exits 0.
-An empty result is not a failure.
+`--filter` and `--menu` together are rejected by the parser before any dossier
+is read: both answer "which dossier", and letting one silently win is how the
+result came to depend on whether a pattern was attached. `--filter <pattern>`
+that matches nothing is an error (`no dossier matches '<pattern>'`); `--filter`
+with no dossiers at all is an error too. Every other outcome, including "the
+selection has no tasks", prints a message and exits 0. An empty result is not a
+failure.
 
 ## Output
 
@@ -470,8 +472,10 @@ came from, and the gaps are the design, not a bug:
 | `dossiers/*.md` | file stem | modification time, newest first, then file name |
 
 Both directories are optional; neither existing is simply "no sources". A file
-whose name is not a date in `entries/`, or not `.md`, is skipped. Nothing is
-read outside those two directories.
+whose name is not a date in `entries/`, or not `.md`, is skipped. A file that
+cannot be read -- a permission error, a broken symlink, a directory that
+happens to end in `.md` -- is skipped with a warning, so one bad note does not
+hide every other one. Nothing is read outside those two directories.
 
 **Sealed dossiers are skipped, always.** A dossier whose YAML frontmatter has a
 `sealed:` field is never read, not even with `--all`. `bureau seal` does not

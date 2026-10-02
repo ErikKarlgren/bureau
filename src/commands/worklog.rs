@@ -111,11 +111,8 @@ fn select(dossiers: &[PathBuf], args: &WorklogArgs) -> Result<PathBuf> {
         pattern: args.filter.as_deref(),
         menu: args.menu,
     };
-    let mut chosen = selection::select(dossiers, request, selection::pick)?;
 
-    chosen
-        .pop()
-        .context("the selection returned no dossier to log against")
+    selection::select(dossiers, request, selection::pick)
 }
 
 /// Read the single line to log, or nothing when there is none to log.
