@@ -216,6 +216,10 @@ diff --git a/dossiers/9820 - mine crypto.md b/dossiers/9820 - mine crypto.md
 ...
 ```
 }}}
+
+
+### 5501 - a dossier with nothing committed this period
+(No git changes were found)
 ````
 
 (The outer fence here is four backticks because the example contains three:
@@ -248,6 +252,11 @@ Shape rules:
   self-contained daily document. Its blocks follow **first appearance in the
   period** (the order the dossiers first show up among the days), ties broken
   by name.
+- Every dossier in scope gets a block there. A dossier git reports no changes
+  for prints its heading and `(No git changes were found)`; one whose diff
+  could not be read prints `(Git changes could not be read)` instead. The
+  section therefore appears whenever the period mentions a dossier at all, and
+  `--no-diff` is the only way to leave it out.
 
 ### Entry content
 
@@ -294,9 +303,15 @@ With `--filter`, the report is dossier-centric: only the chosen dossier's
   any `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/`GIT_CONFIG_VALUE_*` pair are
   cleared from the child environment. The exact list is pinned by a test, so a
   later change is a decision rather than drift.
-- A git failure while collecting one dossier's diff is a **warning on stderr**,
-  not a lost report: the daily work is already assembled and the report's core
-  is the notes. The dossier's block is omitted rather than printed empty.
+- A dossier with worklog lines but no commit in the period has nothing to show,
+  and says so: `(No git changes were found)` under its heading. The daily work
+  is the report's core, so an empty diff is never an error and never a reason
+  to drop the block.
+- A git failure while collecting one dossier's diff is a **warning on stderr**
+  and `(Git changes could not be read)` in the document. The two are separate
+  on purpose: a redirected report loses stderr, and an unread diff must never
+  read as "no changes", because the changes may well be there. The daily work
+  is already assembled either way, so a broken diff still leaves a report.
 - A dossier that has worklog lines in the period but has since been deleted
   cannot be read, so it is absent from the daily work; its diff cannot be
   attached to a current path. Known v1 gap: the report looks at files that are
@@ -474,9 +489,11 @@ Command (`src/commands/report.rs`):
   are, so command tests supply placeholders instead of calling git and do not
   depend on the installed git version. Useful fakes, as plain closures: one
   returning the dossier name as the diff (placement and block order), one
-  returning `Err` (the stderr warning, and that the report still prints), one
-  recording the requests (which dossiers and which range were asked for, and
-  that `--no-diff` never asks), one returning empty (no empty block prints).
+  returning `Err` (the stderr warning and the `(Git changes could not be read)`
+  note), one returning empty (the `(No git changes were found)` note, and that
+  no fold markers or fence are printed for it), one recording the requests
+  (which dossiers and which range were asked for, and that `--no-diff` never
+  asks).
 - The real git call is tested in `git.rs` against a scratch repository carrying
   hostile config (`diff.colormoved`, a `textconv`, `diff.algorithm`,
   `color.diff.*`) so the pinned flags are proven, and a rename exercises

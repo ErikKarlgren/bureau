@@ -11,7 +11,7 @@ use crate::cli::ReportArgs;
 use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
 use crate::commands::{selection, sources};
 use crate::git;
-use crate::report::{self, Dossier, Input};
+use crate::report::{self, Changes, Dossier, Input};
 use crate::style::{self, Palette};
 use crate::worklog;
 
@@ -170,7 +170,7 @@ fn run_in(
         );
     }
 
-    let mut diffs = Vec::new();
+    let mut diffs: Vec<(String, Changes)> = Vec::new();
     let mut warnings = Vec::new();
     if !args.no_diff {
         for name in report::dossier_order(&days) {
@@ -186,10 +186,19 @@ fn run_in(
                 color: palette == Palette::ON,
             };
 
+            // A dossier the daily work mentions always gets a block: an empty
+            // diff or a git that could not be read is said out loud in the
+            // report, because a warning on stderr is lost the moment stdout is
+            // redirected to a file.
             match differ(&request) {
-                Ok(diff) if !diff.trim().is_empty() => diffs.push((name, diff)),
-                Ok(_) => {}
-                Err(error) => warnings.push(format!("could not diff '{name}': {error:#}")),
+                Ok(diff) if !diff.trim().is_empty() => {
+                    diffs.push((name, Changes::Diff(diff)));
+                }
+                Ok(_) => diffs.push((name, Changes::None)),
+                Err(error) => {
+                    warnings.push(format!("could not diff '{name}': {error:#}"));
+                    diffs.push((name, Changes::Unavailable));
+                }
             }
         }
     }
@@ -360,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_diff_is_a_warning_not_a_lost_report() {
+    fn a_failed_diff_is_a_warning_and_a_note_in_the_report() {
         let scratch = with_dossier("report-diff-fails");
         let differ = |_: &DiffRequest| bail!("git exploded");
 
@@ -380,7 +389,34 @@ mod tests {
             "{warnings:?}"
         );
         assert!(output.contains("### A"), "{output}");
-        assert!(!output.contains("Complete git diff"), "{output}");
+        assert!(
+            output.contains("## Complete git diff\n\n### A\n(Git changes could not be read)\n"),
+            "{output}"
+        );
+        assert!(!output.contains("No git changes were found"), "{output}");
+    }
+
+    #[test]
+    fn a_dossier_with_no_commits_says_so_and_warns_about_nothing() {
+        let scratch = with_dossier("report-no-commits");
+        let differ = |_: &DiffRequest| Ok(String::new());
+
+        let (output, warnings) = run_in(
+            scratch.path(),
+            &args(),
+            Palette::OFF,
+            today(),
+            differ,
+            no_picker,
+        )
+        .unwrap();
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(
+            output.contains("## Complete git diff\n\n### A\n(No git changes were found)\n"),
+            "{output}"
+        );
+        assert!(!output.contains("{{{ git diff"), "{output}");
     }
 
     /// `run_in` with the test's differ and picker, so a test only spells out

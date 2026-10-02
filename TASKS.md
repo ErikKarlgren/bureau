@@ -58,10 +58,6 @@
       whole file, so `## Complete git diff` can dwarf the daily work that is the
       report's point. Consider a per-dossier `--numstat` line and a
       `--diff=full|stat|none` switch, or `--no-diff` plus `--stat`.
-- [ ] `bureau report`: a dossier with worklog lines but no commit in the period,
-      or one whose diff failed, is simply absent from the diff section; the
-      failure is a stderr warning, which a redirected report loses. Print
-      `(no committed changes)` / `(diff unavailable)` in the document instead.
 - [ ] `bureau report`: an entry's `## Notes` and `## Worked on Tasks` headings
       are flattened into one bullet list under the day, so the reader cannot
       tell notes from task references. Mirror the entry's own headings as `###`

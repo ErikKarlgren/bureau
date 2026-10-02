@@ -49,6 +49,18 @@ pub struct Day {
     pub dossiers: Vec<(String, Vec<String>)>,
 }
 
+/// What the diff half has to say about one dossier.
+#[derive(Debug)]
+pub enum Changes {
+    /// The diff text, exactly as git emitted it.
+    Diff(String),
+    /// Git was asked and the period holds no changes for this dossier.
+    None,
+    /// Git could not be read, so there may be changes and this report cannot
+    /// say. Never rendered as "no changes".
+    Unavailable,
+}
+
 /// Build the report's days, oldest first.
 ///
 /// A day is in the report when it has an entry file or a dossier logged work
@@ -150,15 +162,17 @@ pub fn dossier_order(days: &[Day]) -> Vec<String> {
 
 /// The whole report: a title, the daily work, and the diffs.
 ///
-/// Empty diffs mean no diff section at all, which is what `--no-diff` asks for
-/// and what a period with no commits would produce anyway.
+/// Every dossier in scope gets a block in the diff section, so a dossier with
+/// nothing to show is named and explained rather than silently missing. An
+/// empty `diffs` slice means no diff section at all, which is what `--no-diff`
+/// asks for and what a report with no dossier work produces anyway.
 ///
 /// One heading level per thing: the title names the period, a day and the diff
 /// section are `##`, and a dossier is `###` under either of them. A diff is
 /// fenced so it renders as code, and wrapped in Neovim fold markers so a
 /// reader can collapse it; the fence is as long as [`fence_width`] says.
 #[must_use]
-pub fn render(from: NaiveDate, to: NaiveDate, days: &[Day], diffs: &[(String, String)]) -> String {
+pub fn render(from: NaiveDate, to: NaiveDate, days: &[Day], diffs: &[(String, Changes)]) -> String {
     let mut lines = vec![title(from, to)];
 
     for (index, day) in days.iter().enumerate() {
@@ -186,19 +200,28 @@ pub fn render(from: NaiveDate, to: NaiveDate, days: &[Day], diffs: &[(String, St
         lines.push(String::new());
         lines.push(String::from("## Complete git diff"));
 
-        for (index, (name, body)) in diffs.iter().enumerate() {
+        for (index, (name, changes)) in diffs.iter().enumerate() {
             if index > 0 {
                 lines.push(String::new());
             }
             lines.push(String::new());
             lines.push(format!("### {name}"));
-            lines.push(String::from("{{{ git diff"));
 
-            let fence = "`".repeat(fence_width(body));
-            lines.push(format!("{fence}diff"));
-            lines.extend(body.lines().map(str::to_owned));
-            lines.push(fence);
-            lines.push(String::from("}}}"));
+            match changes {
+                Changes::Diff(body) => {
+                    lines.push(String::from("{{{ git diff"));
+
+                    let fence = "`".repeat(fence_width(body));
+                    lines.push(format!("{fence}diff"));
+                    lines.extend(body.lines().map(str::to_owned));
+                    lines.push(fence);
+                    lines.push(String::from("}}}"));
+                }
+                Changes::None => lines.push(String::from("(No git changes were found)")),
+                Changes::Unavailable => {
+                    lines.push(String::from("(Git changes could not be read)"));
+                }
+            }
         }
     }
 
@@ -589,7 +612,7 @@ mod tests {
         let days = days(&built, Palette::OFF);
         let diffs = vec![(
             "A".to_owned(),
-            "diff --git a/dossiers/A.md b/dossiers/A.md\n@@ -1 +1 @@\n".to_owned(),
+            Changes::Diff("diff --git a/dossiers/A.md b/dossiers/A.md\n@@ -1 +1 @@\n".to_owned()),
         )];
 
         assert_eq!(
@@ -631,12 +654,43 @@ diff --git a/dossiers/A.md b/dossiers/A.md
         let built = input(vec![dossier("A", &[(date(2026, 9, 20), "- did A\n")])], &[]);
         let days = days(&built, Palette::OFF);
         let body = String::from("diff --git a/A.md b/A.md\n@@ -1,3 +1,3 @@\n ```\n-old\n+new\n");
-        let diffs = vec![("A".to_owned(), body)];
+        let diffs = vec![("A".to_owned(), Changes::Diff(body))];
 
         let output = render(built.from, built.to, &days, &diffs);
 
         assert!(output.contains("````diff\n"), "{output}");
         assert!(output.contains("\n````\n}}}\n"), "{output}");
+    }
+
+    #[test]
+    fn a_dossier_with_no_changes_says_so_under_its_heading() {
+        let built = input(vec![dossier("A", &[(date(2026, 9, 20), "- did A\n")])], &[]);
+        let days = days(&built, Palette::OFF);
+        let diffs = vec![("A".to_owned(), Changes::None)];
+
+        let output = render(built.from, built.to, &days, &diffs);
+
+        assert!(
+            output.contains("## Complete git diff\n\n### A\n(No git changes were found)\n"),
+            "{output}"
+        );
+        assert!(!output.contains("{{{ git diff"), "{output}");
+    }
+
+    #[test]
+    fn an_unreadable_diff_is_never_reported_as_no_changes() {
+        let built = input(vec![dossier("A", &[(date(2026, 9, 20), "- did A\n")])], &[]);
+        let days = days(&built, Palette::OFF);
+        let diffs = vec![("A".to_owned(), Changes::Unavailable)];
+
+        let output = render(built.from, built.to, &days, &diffs);
+
+        assert!(
+            output.contains("## Complete git diff\n\n### A\n(Git changes could not be read)\n"),
+            "{output}"
+        );
+        assert!(!output.contains("No git changes were found"), "{output}");
+        assert!(!output.contains("{{{ git diff"), "{output}");
     }
 
     #[test]
