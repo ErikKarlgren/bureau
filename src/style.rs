@@ -51,6 +51,7 @@ const BOLD: Style = Style { open: "\x1b[1m" };
 const BOLD_BLUE: Style = Style { open: "\x1b[1;34m" };
 const BOLD_MAGENTA: Style = Style { open: "\x1b[1;35m" };
 const BOLD_GREEN: Style = Style { open: "\x1b[1;32m" };
+const BOLD_YELLOW: Style = Style { open: "\x1b[1;33m" };
 
 /// The colours a run draws with.
 ///
@@ -71,6 +72,8 @@ pub struct Palette {
     heading_style: Style,
     /// Everything else printed: the lines that only lead to a task.
     context_style: Style,
+    /// A warning, which goes to stderr rather than into the report.
+    warning_style: Style,
 }
 
 impl Palette {
@@ -85,6 +88,7 @@ impl Palette {
         done: Style::NONE,
         heading_style: Style::NONE,
         context_style: Style::NONE,
+        warning_style: Style::NONE,
     };
 
     /// Blue for what can be picked up, cyan for what has been started, magenta
@@ -99,6 +103,7 @@ impl Palette {
         done: GREEN,
         heading_style: BOLD,
         context_style: DIM,
+        warning_style: BOLD_YELLOW,
     };
 
     /// The style a section's rule is drawn in.
@@ -141,6 +146,21 @@ impl Palette {
         }
     }
 
+    /// The style a task's marker is drawn in, whatever section it is in.
+    ///
+    /// `bureau report` prints a day's notes outside any listing section, so it
+    /// needs the hue a marker's state earns on its own rather than the hue a
+    /// section gives it.
+    #[must_use]
+    pub const fn state(self, state: State) -> Style {
+        match state {
+            State::Todo => self.todo,
+            State::Doing | State::Almost => self.started,
+            State::Waiting => self.waiting,
+            State::Done | State::Cancelled => self.done,
+        }
+    }
+
     /// The style a source heading is drawn in.
     #[must_use]
     pub const fn heading(self) -> Style {
@@ -152,6 +172,15 @@ impl Palette {
     pub const fn context(self) -> Style {
         self.context_style
     }
+
+    /// The style a warning is drawn in.
+    ///
+    /// This is the one hue the report itself never uses, so a warning printed
+    /// beside it cannot be mistaken for a line of it.
+    #[must_use]
+    pub const fn warning(self) -> Style {
+        self.warning_style
+    }
 }
 
 /// The palette for a run writing to standard output.
@@ -161,10 +190,24 @@ impl Palette {
 /// anything non-empty, and `TERM=dumb`.
 #[must_use]
 pub fn for_stdout() -> Palette {
+    palette_for(std::io::stdout().is_terminal())
+}
+
+/// The palette for a run writing to standard error.
+///
+/// Warnings are the only thing written there. They are coloured even when the
+/// report itself is a pipe and therefore plain, so a notice still stands out.
+#[must_use]
+pub fn for_stderr() -> Palette {
+    palette_for(std::io::stderr().is_terminal())
+}
+
+/// The palette for a stream, or plain text when the user asked for it.
+fn palette_for(terminal: bool) -> Palette {
     let no_color = env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
     let dumb_terminal = env::var_os("TERM").is_some_and(|term| term == "dumb");
 
-    if wanted(std::io::stdout().is_terminal(), no_color, dumb_terminal) {
+    if wanted(terminal, no_color, dumb_terminal) {
         Palette::ON
     } else {
         Palette::OFF
@@ -302,5 +345,44 @@ mod tests {
                 .map(|s| s.paint("[ ]")),
             Some("[ ]".to_owned())
         );
+    }
+
+    #[test]
+    fn every_state_has_a_hue_of_its_own() {
+        let palette = Palette::ON;
+
+        assert_eq!(
+            palette.state(State::Todo).paint("[ ]"),
+            "\x1b[34m[ ]\x1b[0m"
+        );
+        assert_eq!(
+            palette.state(State::Doing).paint("[.]"),
+            "\x1b[36m[.]\x1b[0m"
+        );
+        assert_eq!(
+            palette.state(State::Almost).paint("[o]"),
+            "\x1b[36m[o]\x1b[0m"
+        );
+        assert_eq!(
+            palette.state(State::Waiting).paint("[?]"),
+            "\x1b[35m[?]\x1b[0m"
+        );
+        assert_eq!(
+            palette.state(State::Done).paint("[x]"),
+            "\x1b[32m[x]\x1b[0m"
+        );
+        assert_eq!(
+            palette.state(State::Cancelled).paint("[-]"),
+            "\x1b[32m[-]\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn a_warning_is_yellow_while_the_report_never_is() {
+        assert_eq!(
+            Palette::ON.warning().paint("warning: x"),
+            "\x1b[1;33mwarning: x\x1b[0m"
+        );
+        assert_eq!(Palette::OFF.warning().paint("warning: x"), "warning: x");
     }
 }

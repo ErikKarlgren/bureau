@@ -25,6 +25,8 @@ pub enum Command {
     Worklog(WorklogArgs),
     /// List the tasks in your dossiers and entries.
     Tasks(TasksArgs),
+    /// Print a report of the work in a period.
+    Report(ReportArgs),
 }
 
 /// What `bureau new` can create.
@@ -50,8 +52,8 @@ pub struct WorklogArgs {
     /// Part of a dossier's name to log against
     pub filter: Option<String>,
 
-    /// Date to log against, as YYYY-MM-DD (defaults to today)
-    #[arg(long, value_name = "YYYY-MM-DD")]
+    /// Date to log against, in plain English or YYYY-MM-DD (defaults to today)
+    #[arg(long, value_name = "DATE")]
     pub date: Option<String>,
 
     /// Choose a dossier from all of them instead of filtering
@@ -78,6 +80,34 @@ pub struct TasksArgs {
     /// Also list finished and cancelled dossier tasks
     #[arg(long)]
     pub all: bool,
+}
+
+/// Arguments for `bureau report`.
+#[derive(Debug, Args)]
+pub struct ReportArgs {
+    /// One day, in plain English or YYYY-MM-DD (defaults to today)
+    #[arg(value_name = "DATE", conflicts_with_all = ["from", "to"])]
+    pub date: Option<String>,
+
+    /// First day of the period, inclusive (defaults to today)
+    #[arg(long, value_name = "DATE")]
+    pub from: Option<String>,
+
+    /// Last day of the period, inclusive (defaults to today)
+    #[arg(long, value_name = "DATE")]
+    pub to: Option<String>,
+
+    /// Leave out the git diff section
+    #[arg(long)]
+    pub no_diff: bool,
+
+    /// Report one dossier whose name matches PATTERN
+    #[arg(long, value_name = "PATTERN")]
+    pub filter: Option<String>,
+
+    /// Choose a dossier from all of them instead of filtering
+    #[arg(long, conflicts_with = "filter")]
+    pub menu: bool,
 }
 
 /// Which dossier `bureau tasks` is about, when `--filter` was given.

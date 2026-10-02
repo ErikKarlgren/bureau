@@ -1,8 +1,8 @@
 # `bureau report`
 
-Design note. Not implemented yet. This document is the contract the
-implementation has to satisfy, written before the code the way
-`docs/subcommands/tasks.md` was.
+Implemented. This document is the contract the implementation satisfies; it was
+written before the code the way `docs/subcommands/tasks.md` was, and is kept in
+step with it.
 
 ## Purpose
 
@@ -360,15 +360,16 @@ IO at the edge in `commands/report.rs`.
 
 | File | Change |
 |---|---|
-| `src/report.rs` (new) | Date grammar, range, worklog/entry extraction, grouping, ordering, rendering. Pure functions over `&str` and paths, in the style of `src/tasks.rs` and `src/worklog.rs`. Takes `today` and the diffs as inputs. |
-| `src/date.rs` (new) | `parse_date(text, today)`, the relative grammar and the calendar arithmetic, shared by report and `worklog --date`. |
-| `src/commands/report.rs` (new) | Repository root, source discovery (sealed included), git diffs, selection, printing. The `run`/`run_in` split from `commands/tasks.rs`. |
-| `src/git.rs` | Add a read-side `diff` (and the commit resolution it needs) with the pinned flags; reuse `toplevel`. |
+| `src/report.rs` | The `Input`/`Day` model, grouping, ordering and rendering: pure functions over `&str`, in the style of `src/tasks.rs`. `days` takes the palette; the diffs are rendered separately. |
+| `src/date.rs` | `parse` and `range`: the plain-English grammar and the calendar arithmetic, shared by report and `worklog --date`. |
+| `src/commands/report.rs` | Repository root, source discovery (sealed included), entries, the injected differ and picker, printing. The `run`/`run_in` split from `commands/tasks.rs`. |
+| `src/git.rs` | `version`/`follows_renames`, `has_head`, `last_commit`, `empty_tree` and the pinned `diff`. |
 | `src/cli.rs` | `Command::Report(ReportArgs)`. |
 | `src/commands/mod.rs` | One `match` arm. |
-| `src/tasks.rs` | Possibly a "render every bullet" path for entry content, or a small extractor in `report.rs`. |
-| `src/style.rs` | The section-free marker hue report needs (see Colour). |
-| `README.md` | The `bureau report` paragraph, once it exists. |
+| `src/tasks.rs` | `Tree::render_all`, for printing a day's bullets without a section. |
+| `src/style.rs` | `Palette::state`, the section-free marker hue, and `waiting`/`BLOCKED` moved from yellow to magenta (see Colour). |
+| `src/worklog.rs` | `worklog_days`, `without_links` and `linked_dossiers`, the readers the report is built from. |
+| `README.md` | The `bureau report` paragraph. |
 
 ## Tests
 
@@ -380,9 +381,10 @@ Pure (`src/report.rs`, `src/date.rs`):
   fallback when the entry is missing, duplicate day headings, sealed sources
   included, `--no-diff`, the fold markers, the first-appearance order of the
   diff blocks, and CRLF.
-- Colour: a terminal run hues the headings and each marker by state, a pipe /
-  `NO_COLOR` / `TERM=dumb` prints byte-for-byte the plain report, and no escape
-  ever reaches the diff body.
+- Colour: a terminal run hues each marker by state; a pipe / `NO_COLOR` /
+  `TERM=dumb` prints byte-for-byte the plain report. The diff body is passed
+  through exactly as git emits it, so with colour on it carries git's red and
+  green and with colour off it carries none.
 - A fixture's **full report**, compared byte for byte. This is the format
   regression test, the counterpart of `tasks`' worked example.
 

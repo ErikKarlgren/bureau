@@ -19,19 +19,23 @@ bureau new entry
 bureau worklog refactor
 bureau tasks
 bureau tasks --all
+bureau report
+bureau report --from "a week ago"
 ```
 
 Dossiers are written to `dossiers/<name>.md` and daily entries to
 `entries/<YYYY-MM-DD>.md`, both at the root of that repository, and both are
 committed.
 
-`bureau worklog [<filter>] [--date YYYY-MM-DD] [--menu]` appends one line to a
+`bureau worklog [<filter>] [--date <date>] [--menu]` appends one line to a
 dossier's `## Worklog` section and links that dossier from the same day's entry.
 A filter matching several dossiers opens a picker; with no filter the most
 recently modified dossier wins, or the picker opens when several share the
 newest timestamp. `--menu` asks the picker over every dossier instead, and
 cannot be combined with a filter. `--date` logs against another day instead of
-today, which is how you backfill; it is the only way to do so.
+today, which is how you backfill; it takes a plain date or plain English
+(`yesterday`, `a week ago`, `3 months ago`), sharing the grammar `bureau report`
+uses.
 
 ## Workflow
 Keep a git repository for your notes and run bureau from a terminal inside it.
@@ -93,6 +97,18 @@ narrows the listing to one dossier the same way `bureau worklog` picks one,
 `--menu` opens the picker over all of them instead, and sealed dossiers are
 never listed, not even with `--all`. The exact rules, output format and
 examples live in [`docs/subcommands/tasks.md`](docs/subcommands/tasks.md).
+
+`bureau report [<date>] [--from <date>] [--to <date>] [--no-diff] [--filter <pattern>] [--menu]`
+prints the work in a period: each day's entry notes and the dossier worklogs
+logged that day, oldest first, followed by the `git diff` of each dossier the
+period touched. `<date>` is one day in plain English or `YYYY-MM-DD`; `--from`
+and `--to` are an inclusive range with `--to` defaulting to today, and
+`--filter` narrows the report to one dossier. The report never writes anything,
+prints plain text on stdout, and is meant to be piped into a file or an LLM —
+`--no-diff` leaves it as the daily work alone, and warnings go to stderr.
+Sealed dossiers are still included: a seal hides a dossier from `tasks`, not
+from history. The exact rules live in
+[`docs/subcommands/report.md`](docs/subcommands/report.md).
 
 ## License
 MIT. See [LICENSE](LICENSE).

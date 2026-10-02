@@ -20,11 +20,11 @@ use crate::worklog;
 ///
 /// # Errors
 ///
-/// Fails when the repository root cannot be found, when `--date` is not a
-/// date, when no dossier matches, when the picker is cancelled, or when the
-/// chosen dossier has no `## Worklog` section. Nothing is written until the
-/// message is in hand, and a failure between the two writes leaves the entry
-/// already linked, so re-running logs the line exactly once.
+/// Fails when the repository root cannot be found, when `--date` cannot be
+/// read as a date, when no dossier matches, when the picker is cancelled, or
+/// when the chosen dossier has no `## Worklog` section. Nothing is written
+/// until the message is in hand, and a failure between the two writes leaves
+/// the entry already linked, so re-running logs the line exactly once.
 pub fn run(args: &WorklogArgs) -> Result<()> {
     let root = git::toplevel()?;
     run_in(&root, args, prompt_for_message)
@@ -91,13 +91,12 @@ fn run_in(root: &Path, args: &WorklogArgs, prompt: impl FnOnce() -> Result<Strin
 }
 
 /// The date to log against: `--date` when given, today otherwise.
+///
+/// The parsing is [`crate::date::parse`], so `--date` accepts the same plain
+/// English as `bureau report`, e.g. `--date "a week ago"`.
 fn target_date(date: Option<&str>) -> Result<NaiveDate> {
-    let Some(text) = date else {
-        return Ok(Local::now().date_naive());
-    };
-
-    NaiveDate::parse_from_str(text, "%Y-%m-%d")
-        .with_context(|| format!("'{text}' is not a date; expected YYYY-MM-DD"))
+    let today = Local::now().date_naive();
+    date.map_or(Ok(today), |text| crate::date::parse(text, today))
 }
 
 /// Decide which dossier to log against.
