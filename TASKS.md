@@ -43,7 +43,24 @@
       (currently: rename detection only). Tracked in `docs/subcommands/report.md`.
 - [ ] `bureau new dossier`: after creating a new dossier, run `bureau worklog`, add the message "created dossier", and link this new dossier to today's entry. If the latter doesn't exist, simply create it then.
       - By "run `bureau worklog`" I mean doing so without shelling out
-
-## Current features
+- [ ] Reading a note in full just to check whether it is sealed: `is_sealed` only
+      looks at the leading frontmatter, but `source_of` reads the whole file.
+      Reading just the head would save the I/O and the allocation on large
+      dossiers; low value while notes are small, so it was left alone.
 - [ ] Shell completion for bash and fish
 - [ ] Fix commit behavior. Whenever any `bureau` command is run, all files dependant on `bureau` (for now only entries/ and dossiers/) need to be committed. Need to discuss whether to create 1 commit per file, 1 commit per type of file (e.g. 1 commit for all daily entries, another for all dossiers). The problem to fix is that, after manually editing some files already created with `bureau new`, the changes aren't committed automatically, and then the user needs to do so manually, which is undesired.
+- [ ] `bureau new (dossier|entry)`: print the name of the created file
+- [ ] Maybe fix later: `bureau tasks` treats a task inside a fenced (or indented)
+      code block as real work. `Tree::parse` only looks for a leading `-`, so an
+      example checklist pasted into a dossier shows up in the listing. No
+      current dossier has a fence, so this is latent; if it bites, track fence
+      state and skip what is inside. The parser is deliberately looser than
+      CommonMark, so this is a judgment call rather than a clear bug.
+- [ ] `bureau tasks --quickfix`: emit locations an editor can consume
+      (`path:line: text`, or whatever Neovim's quickfix/telescope wants), so the
+      listing jumps straight to a task instead of being grepped for. `Node`
+      carries no line number today; recording one during `parse` is small, and
+      choosing the output shape is the work. General features come first, so
+      this is not a priority.
+
+## Current features
