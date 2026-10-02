@@ -44,12 +44,12 @@ const RESET: &str = "\x1b[0m";
 /// these names are what it is guaranteed to have an opinion about.
 const BLUE: Style = Style { open: "\x1b[34m" };
 const CYAN: Style = Style { open: "\x1b[36m" };
-const YELLOW: Style = Style { open: "\x1b[33m" };
+const MAGENTA: Style = Style { open: "\x1b[35m" };
 const GREEN: Style = Style { open: "\x1b[32m" };
 const DIM: Style = Style { open: "\x1b[2m" };
 const BOLD: Style = Style { open: "\x1b[1m" };
 const BOLD_BLUE: Style = Style { open: "\x1b[1;34m" };
-const BOLD_YELLOW: Style = Style { open: "\x1b[1;33m" };
+const BOLD_MAGENTA: Style = Style { open: "\x1b[1;35m" };
 const BOLD_GREEN: Style = Style { open: "\x1b[1;32m" };
 
 /// The colours a run draws with.
@@ -87,15 +87,15 @@ impl Palette {
         context_style: Style::NONE,
     };
 
-    /// Blue for what can be picked up, cyan for what has been started, yellow
+    /// Blue for what can be picked up, cyan for what has been started, magenta
     /// for what is waiting on somebody else, green for what is over.
     pub const ON: Self = Self {
         actionable: BOLD_BLUE,
-        blocked: BOLD_YELLOW,
+        blocked: BOLD_MAGENTA,
         finished: BOLD_GREEN,
         todo: BLUE,
         started: CYAN,
-        waiting: YELLOW,
+        waiting: MAGENTA,
         done: GREEN,
         heading_style: BOLD,
         context_style: DIM,
@@ -214,7 +214,7 @@ mod tests {
             palette
                 .marker(Section::Blocked, State::Waiting)
                 .map(|s| s.paint("[?]")),
-            Some("\x1b[33m[?]\x1b[0m".to_owned())
+            Some("\x1b[35m[?]\x1b[0m".to_owned())
         );
         assert_eq!(
             palette

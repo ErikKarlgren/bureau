@@ -180,11 +180,11 @@ emphasis, and prints byte for byte what it printed before colour existed.
 | Line | Drawn in |
 |---|---|
 | `=== ACTIONABLE ===` | bold blue |
-| `=== BLOCKED ===` | bold yellow |
+| `=== BLOCKED ===` | bold magenta |
 | `=== FINISHED ===` | bold green |
 | `[ ]` in `ACTIONABLE` | blue |
 | `[.]` and `[o]` in `ACTIONABLE` | cyan |
-| `[?]` in `BLOCKED` | yellow |
+| `[?]` in `BLOCKED` | magenta |
 | `[x]` and `[-]` in `FINISHED` | green |
 | `# <heading>`, entry or dossier | bold, no hue |
 | every other task line | dim |
@@ -194,7 +194,7 @@ emphasis, and prints byte for byte what it printed before colour existed.
 Three things about that table are worth spelling out.
 
 **A section colours its own markers.** That is a question about the marker, not
-about the section's match predicate. Only `[?]` is yellow in `BLOCKED`: the
+about the section's match predicate. Only `[?]` is magenta in `BLOCKED`: the
 branch `--all` adds is dim, even though the section's predicate calls every task
 in it a match. Since the rule never asks whether a line matched, it never has to
 look at the tree, and a task that appears in two sections can legitimately be
@@ -208,7 +208,7 @@ marker, and covers the whole line.
 
 **The palette is the eight basic `ANSI` colours**, plus the bold and dim
 attributes: no 256-colour, no truecolor, and no bright slots, so the terminal's
-theme decides the shades. Only blue, cyan, yellow and green are ever used.
+theme decides the shades. Only blue, cyan, magenta and green are ever used.
 `[.]` and `[o]` share a hue on purpose: both mean the work has been started, and
 the marker itself is what tells them apart.
 
@@ -555,7 +555,7 @@ count of each state would need; nothing counts anything in v1
 
 - Which markers each section hues, and that a section's other marker states take
   no hue, so `--all`'s branch of `BLOCKED` is context rather than a wall of
-  yellow.
+  magenta.
 - That a pipe, `NO_COLOR`, and `TERM=dumb` each turn colour off, as a plain
   function of those three facts.
 - That the palette draws with the basic `ANSI` slots and the two attributes,

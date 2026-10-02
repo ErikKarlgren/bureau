@@ -1061,7 +1061,7 @@ mod tests {
         // wait, so only that line takes the hue.
         let content = "- [?] Waiting\n  - [ ] Held up\n";
         let expected = lines(&[
-            "- \x1b[33m[?]\x1b[0m Waiting",
+            "- \x1b[35m[?]\x1b[0m Waiting",
             "  \x1b[2m- [ ] Held up\x1b[0m",
         ]);
 
