@@ -1,5 +1,8 @@
 //! The command line interface.
 
+use std::convert::Infallible;
+use std::str::FromStr;
+
 use clap::{Args, Parser, Subcommand};
 
 /// Git-based work dossiers for legacy systems.
@@ -20,6 +23,8 @@ pub enum Command {
     },
     /// Log a line of work against a dossier.
     Worklog(WorklogArgs),
+    /// List the tasks in your dossiers and entries.
+    Tasks(TasksArgs),
 }
 
 /// What `bureau new` can create.
@@ -49,7 +54,112 @@ pub struct WorklogArgs {
     #[arg(long, value_name = "YYYY-MM-DD")]
     pub date: Option<String>,
 
-    /// Choose a dossier from all of them
-    #[arg(long)]
+    /// Choose a dossier from all of them instead of filtering
+    #[arg(long, conflicts_with = "filter")]
     pub menu: bool,
+}
+
+/// Arguments for `bureau tasks`.
+#[derive(Debug, Args)]
+pub struct TasksArgs {
+    /// List one dossier: the newest on its own, or the one matching PATTERN
+    #[arg(
+        long,
+        value_name = "PATTERN",
+        num_args = 0..=1,
+        default_missing_value = ""
+    )]
+    pub filter: Option<Filter>,
+
+    /// Choose a dossier from all of them instead of filtering
+    #[arg(long, conflicts_with = "filter")]
+    pub menu: bool,
+
+    /// Also list finished and cancelled dossier tasks
+    #[arg(long)]
+    pub all: bool,
+}
+
+/// Which dossier `bureau tasks` is about, when `--filter` was given.
+///
+/// The flag has two meanings and the field is an `Option` because of it: no
+/// `--filter` at all is `None`, `--filter` with nothing after it is
+/// [`Filter::Newest`], and `--filter PATTERN` is [`Filter::Matching`]. An
+/// `Option<Option<_>>` would say the same thing less clearly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Filter {
+    /// `--filter` on its own: the most recently modified dossier.
+    Newest,
+    /// `--filter PATTERN`: the dossier whose name matches it.
+    Matching(String),
+}
+
+impl Filter {
+    /// The pattern to match dossier names against, when there is one.
+    #[must_use]
+    pub const fn pattern(&self) -> Option<&str> {
+        match self {
+            Self::Matching(pattern) => Some(pattern.as_str()),
+            Self::Newest => None,
+        }
+    }
+}
+
+impl FromStr for Filter {
+    type Err = Infallible;
+
+    /// The empty string is clap's "the flag was given with no value", which is
+    /// what `default_missing_value` hands over; anything else is the pattern.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(if value.is_empty() {
+            Self::Newest
+        } else {
+            Self::Matching(value.to_owned())
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Parse arguments the way the process would, without a process.
+    fn parse(arguments: &[&str]) -> Result<Cli, clap::Error> {
+        let mut argv = vec!["bureau"];
+        argv.extend_from_slice(arguments);
+        Cli::try_parse_from(argv)
+    }
+
+    #[test]
+    fn a_filter_and_a_menu_together_are_rejected() {
+        // Both mean "pick a dossier"; letting one silently win is how
+        // `--filter PATTERN --menu` and `--filter --menu` came to disagree.
+        let cases: &[&[&str]] = &[
+            &["tasks", "--filter", "auth", "--menu"],
+            &["tasks", "--filter", "--menu"],
+            &["worklog", "auth", "--menu"],
+        ];
+
+        for &arguments in cases {
+            assert!(
+                parse(arguments).is_err(),
+                "{arguments:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn each_way_of_choosing_is_accepted_on_its_own() {
+        let cases: &[&[&str]] = &[
+            &["tasks", "--filter", "auth"],
+            &["tasks", "--filter"],
+            &["tasks", "--menu"],
+            &["worklog", "auth"],
+            &["worklog", "--menu"],
+        ];
+
+        for &arguments in cases {
+            assert!(parse(arguments).is_ok(), "{arguments:?} should be accepted");
+        }
+    }
 }

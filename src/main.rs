@@ -4,6 +4,8 @@ mod cli;
 mod commands;
 mod dossier;
 mod git;
+mod style;
+mod tasks;
 mod template;
 mod worklog;
 

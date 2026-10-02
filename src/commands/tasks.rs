@@ -1,0 +1,789 @@
+//! `bureau tasks`.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use chrono::NaiveDate;
+
+use crate::cli::{Filter, TasksArgs};
+use crate::commands::paths::ENTRIES_DIR;
+use crate::commands::selection::{self, Request};
+use crate::commands::sources;
+use crate::git;
+use crate::style::{self, Palette};
+use crate::tasks::{Scope, Section, Tree};
+
+/// The date a daily entry is named after, as `YYYY-MM-DD`.
+const DATE_FORMAT: &str = "%Y-%m-%d";
+
+/// How a section announces itself.
+const SECTION_RULE: &str = "===";
+
+/// What a run prints when no section has anything in it.
+const NOTHING_ACTIONABLE: &str = "No actionable tasks";
+
+/// List the tasks in every open dossier and entry, as a tree.
+///
+/// # Errors
+///
+/// Fails when the repository root cannot be found, or when a filter matches
+/// nothing or is cancelled at the picker. A note that cannot be read is
+/// skipped with a warning rather than failing the run. Nothing is written
+/// either way: this command only reports.
+pub fn run(args: &TasksArgs) -> Result<()> {
+    let root = git::toplevel()?;
+    println!(
+        "{}",
+        run_in(&root, args, style::for_stdout(), selection::pick)?
+    );
+    Ok(())
+}
+
+/// The rest of `run`, with the repository root, the colours and the picker
+/// handed in, so a test can drive it without a git checkout, a terminal or an
+/// environment.
+///
+/// The picker is only consulted for `--filter` and `--menu`, which are also
+/// the only ways to leave the entries out of a run.
+fn run_in(
+    root: &Path,
+    args: &TasksArgs,
+    palette: Palette,
+    picker: impl Fn(&[PathBuf]) -> Result<PathBuf>,
+) -> Result<String> {
+    let request = Request {
+        pattern: args.filter.as_ref().and_then(Filter::pattern),
+        menu: args.menu,
+    };
+    let scope = if args.all { Scope::All } else { Scope::Actions };
+
+    let selected = if request.menu || args.filter.is_some() {
+        // `read_dossiers` rather than the raw listing: the picker should offer
+        // dossiers in the same order, and with the same sealed ones dropped,
+        // as the unfiltered listing and `worklog` do.
+        Some(selection::select(
+            &sources::read_dossiers(root)?,
+            request,
+            picker,
+        )?)
+    } else {
+        None
+    };
+
+    match selected {
+        Some(dossier) => render_one(&dossier, scope, palette),
+        None => render_all(
+            &read_entries(root)?,
+            &sources::read_dossiers(root)?,
+            scope,
+            palette,
+        ),
+    }
+}
+
+/// Every source, rendered into the sections it has something for.
+///
+/// The dossiers arrive already sorted, most recently modified first, from
+/// [`sources::read_dossiers`]: it is the same order `worklog` and the picker
+/// use, and the sealed ones have already been dropped from the list.
+fn render_all(
+    entries: &[Entry],
+    dossiers: &[PathBuf],
+    scope: Scope,
+    palette: Palette,
+) -> Result<String> {
+    // Read and parse every source once, then draw each section from the same
+    // trees: rendering section by section would read and parse a dossier once
+    // per section.
+    let entry_notes: Vec<Note> = entries
+        .iter()
+        .map(|entry| Note::read(&entry.path, &entry.heading, palette))
+        .collect::<Result<_>>()?;
+    let dossier_notes: Vec<Note> = dossiers
+        .iter()
+        .map(|dossier| Note::read(dossier, &crate::worklog::stem(dossier), palette))
+        .collect::<Result<_>>()?;
+
+    let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
+
+    for &section in scope.sections() {
+        let mut lines = Vec::new();
+
+        // Entries are listed while they still have something open, and never
+        // in `FINISHED`: a task ticked off in a day's notes has served its
+        // purpose, and the entry is its own record. `FINISHED` reaches
+        // dossiers only, which is why the two loops are not the same shape --
+        // the wider `BLOCKED` that `--all` asks for covers both.
+        if section != Section::Finished {
+            for note in &entry_notes {
+                push_source(&mut lines, note.lines(section, scope, palette));
+            }
+        }
+        for note in &dossier_notes {
+            push_source(&mut lines, note.lines(section, scope, palette));
+        }
+
+        if !lines.is_empty() {
+            sections.push((section, lines));
+        }
+    }
+
+    Ok(assemble(&sections, palette))
+}
+
+/// The one dossier a filtered run prints.
+fn render_one(path: &Path, scope: Scope, palette: Palette) -> Result<String> {
+    let note = Note::read(path, &crate::worklog::stem(path), palette)?;
+    let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
+
+    for &section in scope.sections() {
+        let lines = note.lines(section, scope, palette);
+        if !lines.is_empty() {
+            sections.push((section, lines));
+        }
+    }
+
+    Ok(assemble(&sections, palette))
+}
+
+/// The section headings and their trees, spaced so each dossier reads as its
+/// own block.
+///
+/// A section rule is glued to whatever prints first under it: the blank line
+/// that sets a dossier off from what came before it is added by the caller, and
+/// the first thing in a section gets none. Sections are told apart by two blank
+/// lines, so the wider gap is what says a new heading has started rather than a
+/// new dossier.
+fn assemble(sections: &[(Section, Vec<String>)], palette: Palette) -> String {
+    if sections.is_empty() {
+        return NOTHING_ACTIONABLE.to_owned();
+    }
+
+    let mut blocks: Vec<String> = Vec::new();
+    for (section, lines) in sections {
+        let rule = format!("{SECTION_RULE} {} {SECTION_RULE}", section.heading());
+        let mut block = format!("{}\n", palette.section(*section).paint(&rule));
+        for line in lines {
+            block.push_str(line);
+            block.push('\n');
+        }
+        blocks.push(block);
+    }
+
+    let mut listing = blocks.join("\n\n");
+
+    // Every block ends with the newline of its last line, and `run` prints the
+    // listing with `println!`, which is what supplies the one line ending the
+    // output should have. Dropping the block's own keeps a blank line from
+    // appearing after the last task -- and keeps this path and the empty one
+    // ending the same way.
+    if listing.ends_with('\n') {
+        listing.pop();
+    }
+
+    listing
+}
+
+/// One note, read and parsed once so every section draws from the same tree.
+struct Note {
+    /// The heading as it prints, already painted.
+    heading: String,
+    /// Everything the file has to say about tasks.
+    tree: Tree,
+}
+
+impl Note {
+    /// Read `path` as a note titled `heading`.
+    fn read(path: &Path, heading: &str, palette: Palette) -> Result<Self> {
+        let contents = fs::read_to_string(path)
+            .with_context(|| format!("could not read '{}'", path.display()))?;
+
+        Ok(Self {
+            heading: palette.heading().paint(&format!("# {heading}")),
+            tree: Tree::parse(&contents),
+        })
+    }
+
+    /// The lines this note prints in `section`, empty when it prints none.
+    fn lines(&self, section: Section, scope: Scope, palette: Palette) -> Vec<String> {
+        let lines = self.tree.render(section, scope, palette);
+        if lines.is_empty() {
+            return lines;
+        }
+
+        let mut shown = Vec::with_capacity(lines.len().saturating_add(1));
+        shown.push(self.heading.clone());
+        shown.extend(lines);
+        shown
+    }
+}
+
+/// Append one source's block to a section, set off from the block before it.
+///
+/// The first source in a section gets no blank line: the rule above it is what
+/// separates it, and keeping it hard against the rule is what stops a heading
+/// from floating away from the section it belongs to. Every source after that
+/// -- entry or dossier alike -- gets exactly one blank line, so both kinds
+/// begin the same way on screen.
+fn push_source(lines: &mut Vec<String>, shown: Vec<String>) {
+    if shown.is_empty() {
+        return;
+    }
+
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    lines.extend(shown);
+}
+
+/// A daily entry: its path, and how it is announced.
+struct Entry {
+    path: PathBuf,
+    heading: String,
+}
+
+/// Every daily entry, oldest date first.
+///
+/// The date comes from the file name rather than from the filesystem, because
+/// a day is what the entry is about. A file in `entries/` that is not named
+/// after a date is not an entry, and is skipped.
+fn read_entries(root: &Path) -> Result<Vec<Entry>> {
+    let mut entries = Vec::new();
+
+    for source in sources::read_markdown(root, ENTRIES_DIR)? {
+        let Some(stem) = source
+            .path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+
+        if NaiveDate::parse_from_str(&stem, DATE_FORMAT).is_err() {
+            continue;
+        }
+
+        entries.push(Entry {
+            path: source.path,
+            heading: format!("{stem} (entry)"),
+        });
+    }
+
+    // Oldest first: the work that has been waiting longest is the work to
+    // pick up first, and an ISO date sorts as text.
+    entries.sort_by(|left, right| left.heading.cmp(&right.heading));
+    Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, SystemTime};
+
+    use super::*;
+    use crate::commands::tests::Scratch;
+
+    /// A dossier with unfinished, blocked and finished work in it.
+    const DOSSIER: &str = "\
+# 1234 - refactor auth
+- [x] Check current auth docs
+- [o] Split auth.rs
+  - [x] Data structures
+  - [?] API: waiting on John
+- [x] Create tests
+  - [o] Data structures
+    - [ ] Evil path
+";
+
+    /// Arguments that list everything.
+    fn args(all: bool) -> TasksArgs {
+        TasksArgs {
+            filter: None,
+            menu: false,
+            all,
+        }
+    }
+
+    /// A picker that fails the test if it is ever consulted.
+    fn no_picker(_: &[PathBuf]) -> Result<PathBuf> {
+        anyhow::bail!("the picker should not have been opened")
+    }
+
+    /// One section of a run's output, headed and all.
+    fn section(output: &str, heading: &str) -> String {
+        let opened = format!("{SECTION_RULE} {heading} {SECTION_RULE}");
+        let start = output
+            .find(&opened)
+            .unwrap_or_else(|| panic!("no {heading} section in:\n{output}"));
+        let header_end = start.saturating_add(opened.len());
+
+        // The next rule after this heading's own line ends the section.
+        let end = output
+            .get(header_end..)
+            .and_then(|rest| rest.find(SECTION_RULE))
+            .map_or(output.len(), |offset| header_end.saturating_add(offset));
+
+        output
+            .get(start..end)
+            .unwrap_or_default()
+            .trim_end()
+            .to_owned()
+    }
+
+    /// Give a file a modification time, so recency is not a race.
+    fn set_modified(path: &Path, when: SystemTime) {
+        let file = fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap_or_else(|error| panic!("could not open '{}': {error}", path.display()));
+        file.set_modified(when).unwrap();
+    }
+
+    /// A scratch root holding [`DOSSIER`].
+    fn with_dossier(name: &str) -> Scratch {
+        let scratch = Scratch::new(name).unwrap();
+        scratch
+            .write("dossiers/1234 - refactor auth.md", DOSSIER)
+            .unwrap();
+        scratch
+    }
+
+    #[test]
+    fn lists_pending_and_blocked_without_all() {
+        let scratch = with_dossier("tasks-pending");
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+
+        assert!(out.contains("=== ACTIONABLE ==="), "{out}");
+        assert!(out.contains("=== BLOCKED ==="), "{out}");
+        assert!(!out.contains("=== FINISHED ==="), "{out}");
+        assert!(out.contains("# 1234 - refactor auth\n"), "{out}");
+        assert!(out.contains("- [o] Split auth.rs\n"), "{out}");
+        assert!(out.contains("  - [?] API: waiting on John\n"), "{out}");
+        assert!(
+            out.contains("- [x] Create tests\n  - [o] Data structures\n"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn the_rule_sits_against_its_first_dossier_and_sections_by_two_blanks() {
+        let scratch = with_dossier("tasks-spacing");
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+
+        // The whole listing, so the gap against the rule and the gap between
+        // two sections are both pinned rather than sampled. No trailing
+        // newline: `run` prints this with `println!`, and a second one would
+        // leave a blank line after the last task.
+        assert_eq!(
+            out,
+            "\
+=== ACTIONABLE ===
+# 1234 - refactor auth
+- [o] Split auth.rs
+- [x] Create tests
+  - [o] Data structures
+    - [ ] Evil path
+
+
+=== BLOCKED ===
+# 1234 - refactor auth
+- [o] Split auth.rs
+  - [?] API: waiting on John
+- [x] Create tests"
+        );
+    }
+
+    #[test]
+    fn every_source_is_set_off_from_the_one_before_it() {
+        let scratch = with_dossier("tasks-entry-spacing");
+        scratch
+            .write("entries/2026-09-21.md", "## Notes\n- [ ] Newer entry\n")
+            .unwrap();
+        scratch
+            .write("entries/2026-09-20.md", "## Notes\n- [ ] Older entry\n")
+            .unwrap();
+
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+
+        // The rule is glued to the first entry, and every source after it --
+        // the newer entry and the dossier alike -- is set off by one blank
+        // line. Entries and dossiers begin the same way on screen.
+        assert!(
+            out.contains(
+                "=== ACTIONABLE ===\n\
+                 # 2026-09-20 (entry)\n- [ ] Older entry\n\n\
+                 # 2026-09-21 (entry)\n- [ ] Newer entry\n\n\
+                 # 1234 - refactor auth\n"
+            ),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn tasks_under_a_wait_are_hidden_until_all() {
+        let scratch = Scratch::new("tasks-waiting-subtree").unwrap();
+        scratch
+            .write(
+                "dossiers/7 - blocked.md",
+                "- [?] Waiting on John\n  - [ ] Do X\n  - [o] Do Y\n",
+            )
+            .unwrap();
+
+        let narrow = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+        assert_eq!(
+            section(&narrow, "BLOCKED"),
+            "=== BLOCKED ===\n# 7 - blocked\n- [?] Waiting on John",
+            "{narrow}"
+        );
+        // The work under the wait is not actionable either, so a plain run
+        // has nothing to say about it anywhere.
+        assert!(!narrow.contains("Do X"), "{narrow}");
+        assert!(!narrow.contains("Do Y"), "{narrow}");
+
+        let wide = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
+        assert_eq!(
+            section(&wide, "BLOCKED"),
+            "=== BLOCKED ===\n# 7 - blocked\n- [?] Waiting on John\n  - [ ] Do X\n  - [o] Do Y",
+            "{wide}"
+        );
+    }
+
+    #[test]
+    fn colour_paints_the_rules_the_headings_and_the_markers() {
+        let scratch = with_dossier("tasks-colour");
+        let out = run_in(scratch.path(), &args(false), Palette::ON, no_picker).unwrap();
+
+        assert!(
+            out.contains("\x1b[1;34m=== ACTIONABLE ===\x1b[0m"),
+            "{out:?}"
+        );
+        assert!(
+            out.contains("\x1b[1m# 1234 - refactor auth\x1b[0m"),
+            "{out:?}"
+        );
+        // The marker carries the colour, and the text after it keeps the
+        // terminal's own foreground.
+        assert!(
+            out.contains("- \x1b[36m[o]\x1b[0m Split auth.rs"),
+            "{out:?}"
+        );
+        assert!(out.contains("- \x1b[34m[ ]\x1b[0m Evil path"), "{out:?}");
+        // A finished task is only the way to the open work below it here, so
+        // the whole line recedes rather than its marker taking a hue.
+        assert!(out.contains("\x1b[2m- [x] Create tests\x1b[0m"), "{out:?}");
+    }
+
+    #[test]
+    fn colour_off_leaves_no_escape_in_the_output() {
+        let scratch = with_dossier("tasks-plain");
+        let out = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
+
+        assert!(!out.contains('\x1b'), "{out:?}");
+    }
+
+    #[test]
+    fn adds_the_finished_section_with_all() {
+        let scratch = with_dossier("tasks-all");
+        let out = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
+        let finished = section(&out, "FINISHED");
+
+        assert_eq!(
+            finished,
+            "=== FINISHED ===\n# 1234 - refactor auth\n- [x] Check current auth docs\n- [o] Split auth.rs\n  - [x] Data structures",
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn prints_nothing_pending_when_there_is_nothing_to_show() {
+        let scratch = Scratch::new("tasks-empty").unwrap();
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+
+        assert_eq!(out, NOTHING_ACTIONABLE);
+    }
+
+    #[test]
+    fn a_missing_directory_is_not_an_error() {
+        let scratch = Scratch::new("tasks-no-dirs").unwrap();
+        assert!(run_in(scratch.path(), &args(true), Palette::OFF, no_picker).is_ok());
+    }
+
+    #[test]
+    fn an_unreadable_note_is_skipped_not_fatal() {
+        let scratch = with_dossier("tasks-unreadable");
+        // A directory that ends in `.md` passes the extension check and then
+        // fails to read; one like it must not hide the dossiers that are fine.
+        fs::create_dir_all(scratch.path().join("dossiers/broken.md")).unwrap();
+
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+
+        assert!(out.contains("# 1234 - refactor auth"), "{out}");
+        assert!(!out.contains("broken.md"), "{out}");
+    }
+
+    #[test]
+    fn lists_a_sealed_dossier_nowhere() {
+        let scratch = Scratch::new("tasks-sealed").unwrap();
+        scratch
+            .write(
+                "dossiers/9999 - sealed.md",
+                "---\nsealed: 2026-09-21\n---\n- [ ] Never to be seen\n",
+            )
+            .unwrap();
+        scratch
+            .write("dossiers/1234 - open.md", "- [ ] Visible\n")
+            .unwrap();
+
+        let out = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
+
+        assert!(out.contains("- [ ] Visible"), "{out}");
+        assert!(!out.contains("Never to be seen"), "{out}");
+    }
+
+    #[test]
+    fn prints_entries_before_dossiers_with_their_date() {
+        let scratch = with_dossier("tasks-entries");
+        scratch
+            .write("entries/2026-09-19.md", "## Notes\n- [ ] From the entry\n")
+            .unwrap();
+        scratch
+            .write("entries/2026-09-21.md", "## Notes\n- [ ] Later\n")
+            .unwrap();
+        scratch
+            .write("entries/not-a-date.md", "## Notes\n- [ ] Skipped\n")
+            .unwrap();
+
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+        let later = out.find("# 2026-09-21 (entry)").unwrap();
+        let earlier = out.find("# 2026-09-19 (entry)").unwrap();
+        let dossier = out.find("# 1234 - refactor auth").unwrap();
+
+        // Oldest first: the entry that has waited longest is the one to pick
+        // up first, and the dossiers follow every entry.
+        assert!(earlier < later, "{out}");
+        assert!(later < dossier, "{out}");
+        assert!(!out.contains("Skipped"), "{out}");
+        assert!(!out.contains("## Notes"), "{out}");
+    }
+
+    #[test]
+    fn dossiers_print_most_recently_modified_first() {
+        let scratch = with_dossier("tasks-dossier-order");
+        scratch
+            .write("dossiers/5 - other.md", "- [ ] Elsewhere\n")
+            .unwrap();
+        let now = SystemTime::now();
+        set_modified(
+            &scratch.path().join("dossiers/1234 - refactor auth.md"),
+            now,
+        );
+        set_modified(
+            &scratch.path().join("dossiers/5 - other.md"),
+            now - Duration::from_secs(600),
+        );
+
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+        let newest = out
+            .find("# 1234 - refactor auth")
+            .expect("the newest dossier is missing");
+        let oldest = out
+            .find("# 5 - other")
+            .expect("the older dossier is missing");
+
+        assert!(newest < oldest, "the newest dossier prints first:\n{out}");
+    }
+
+    #[test]
+    fn dossiers_sharing_a_modification_time_print_by_name() {
+        let scratch = with_dossier("tasks-dossier-tie");
+        scratch
+            .write("dossiers/5 - other.md", "- [ ] Elsewhere\n")
+            .unwrap();
+        let when = SystemTime::now() - Duration::from_secs(60);
+        set_modified(
+            &scratch.path().join("dossiers/1234 - refactor auth.md"),
+            when,
+        );
+        set_modified(&scratch.path().join("dossiers/5 - other.md"), when);
+
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+        let lower = out
+            .find("# 1234 - refactor auth")
+            .expect("the lower name is missing");
+        let higher = out.find("# 5 - other").expect("the higher name is missing");
+
+        // A fresh clone stamps every file with one time, so the name is what
+        // decides the whole order there.
+        assert!(lower < higher, "the lower name prints first:\n{out}");
+    }
+
+    #[test]
+    fn the_menu_offers_dossiers_most_recently_modified_first() {
+        let scratch = with_dossier("tasks-menu-order");
+        scratch
+            .write("dossiers/5 - other.md", "- [ ] Elsewhere\n")
+            .unwrap();
+        let now = SystemTime::now();
+        set_modified(
+            &scratch.path().join("dossiers/1234 - refactor auth.md"),
+            now,
+        );
+        set_modified(
+            &scratch.path().join("dossiers/5 - other.md"),
+            now - Duration::from_secs(600),
+        );
+
+        // The picker is handed the same sorted list the listing prints, not
+        // whatever order the filesystem happens to hand back.
+        let picked = |candidates: &[PathBuf]| {
+            assert_eq!(candidates.len(), 2, "both dossiers should be offered");
+            let first = candidates.first().context("there was nothing to pick")?;
+            assert_eq!(crate::worklog::stem(first), "1234 - refactor auth");
+
+            Ok(first.clone())
+        };
+        let menu = TasksArgs {
+            filter: None,
+            menu: true,
+            all: false,
+        };
+        let out = run_in(scratch.path(), &menu, Palette::OFF, picked).unwrap();
+
+        assert!(out.contains("# 1234 - refactor auth"), "{out}");
+    }
+
+    #[test]
+    fn a_finished_entry_task_is_printed_nowhere() {
+        let scratch = with_dossier("tasks-entry-finished");
+        scratch
+            .write(
+                "entries/2026-09-19.md",
+                "## Notes\n- [x] Done that day\n- [ ] Still open\n",
+            )
+            .unwrap();
+
+        let out = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
+
+        assert!(out.contains("- [ ] Still open"), "{out}");
+        assert!(
+            !out.contains("Done that day"),
+            "a finished entry task is not listed, even with --all:\n{out}"
+        );
+        // The finished section is the dossier's, and the dossier here has
+        // nothing closed in it.
+        let finished = section(&out, "FINISHED");
+        assert!(!finished.contains("2026-09-19"), "{out}");
+    }
+
+    #[test]
+    fn a_dossier_with_only_finished_tasks_shows_up_with_all() {
+        let scratch = Scratch::new("tasks-closed-only").unwrap();
+        scratch
+            .write("dossiers/1 - done.md", "- [x] All over\n")
+            .unwrap();
+
+        assert_eq!(
+            run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap(),
+            NOTHING_ACTIONABLE
+        );
+
+        let out = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
+        assert!(out.contains("# 1 - done\n- [x] All over"), "{out}");
+    }
+
+    #[test]
+    fn a_filter_narrows_the_run_to_one_dossier() {
+        let scratch = with_dossier("tasks-filter");
+        scratch
+            .write("dossiers/2 - other.md", "- [ ] Elsewhere\n")
+            .unwrap();
+
+        let filtered = TasksArgs {
+            filter: Some(Filter::Matching("other".to_owned())),
+            menu: false,
+            all: false,
+        };
+        let out = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap();
+
+        // One dossier, one section: the rule sits against it, and the listing
+        // carries no trailing newline of its own.
+        assert_eq!(out, "=== ACTIONABLE ===\n# 2 - other\n- [ ] Elsewhere");
+        assert!(!out.contains("refactor auth"), "{out}");
+    }
+
+    #[test]
+    fn a_filter_that_matches_nothing_is_an_error() {
+        let scratch = with_dossier("tasks-no-match");
+        let filtered = TasksArgs {
+            filter: Some(Filter::Matching("nonsense".to_owned())),
+            menu: false,
+            all: false,
+        };
+
+        let error = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap_err();
+        assert!(error.to_string().contains("no dossier matches"), "{error}");
+    }
+
+    #[test]
+    fn a_bare_filter_asks_when_dossiers_share_the_newest_time() {
+        let scratch = with_dossier("tasks-tied");
+        scratch
+            .write("dossiers/5 - other.md", "- [ ] Elsewhere\n")
+            .unwrap();
+        let when = SystemTime::now() - Duration::from_secs(60);
+        set_modified(
+            &scratch.path().join("dossiers/1234 - refactor auth.md"),
+            when,
+        );
+        set_modified(&scratch.path().join("dossiers/5 - other.md"), when);
+
+        // A fresh checkout stamps every file with one time, so the tie is the
+        // normal case, and the picker is what tells them apart.
+        let picked = |candidates: &[PathBuf]| {
+            assert_eq!(candidates.len(), 2, "the picker should offer both");
+            // Name order breaks the tie, so the lowest name is first.
+            candidates
+                .last()
+                .cloned()
+                .context("there was nothing to pick")
+        };
+        let filtered = TasksArgs {
+            filter: Some(Filter::Newest),
+            menu: false,
+            all: false,
+        };
+        let out = run_in(scratch.path(), &filtered, Palette::OFF, picked).unwrap();
+
+        assert!(out.contains("Elsewhere"), "{out}");
+        assert!(!out.contains("refactor auth"), "{out}");
+    }
+
+    #[test]
+    fn a_bare_filter_takes_the_one_newest_dossier() {
+        let scratch = with_dossier("tasks-one-newest");
+        scratch
+            .write("dossiers/5 - other.md", "- [ ] Elsewhere\n")
+            .unwrap();
+        let now = SystemTime::now();
+        set_modified(
+            &scratch.path().join("dossiers/1234 - refactor auth.md"),
+            now - Duration::from_secs(600),
+        );
+        set_modified(&scratch.path().join("dossiers/5 - other.md"), now);
+
+        let filtered = TasksArgs {
+            filter: Some(Filter::Newest),
+            menu: false,
+            all: false,
+        };
+        let out = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap();
+
+        assert!(
+            out.contains("Elsewhere"),
+            "expected the newest dossier:\n{out}"
+        );
+        assert!(!out.contains("refactor auth"), "{out}");
+    }
+}

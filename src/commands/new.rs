@@ -9,6 +9,7 @@ use chrono::Local;
 
 use crate::Result;
 use crate::cli::DossierArgs;
+use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
 use crate::dossier;
 use crate::git;
 use crate::template;
@@ -21,7 +22,7 @@ use crate::template;
 /// with the same name already exists, or when the dossier cannot be written.
 pub fn dossier(args: &DossierArgs) -> Result<()> {
     let name = args.name.join(" ");
-    let dossiers_dir = git::toplevel()?.join("dossiers");
+    let dossiers_dir = git::toplevel()?.join(DOSSIERS_DIR);
     let path = dossiers_dir.join(dossier::name_to_filename(&name));
 
     if path.exists() {
@@ -53,7 +54,7 @@ pub fn dossier(args: &DossierArgs) -> Result<()> {
 /// entry already exists, or when the entry cannot be written.
 pub fn entry() -> Result<()> {
     let date = Local::now().format("%Y-%m-%d").to_string();
-    let entries_dir = git::toplevel()?.join("entries");
+    let entries_dir = git::toplevel()?.join(ENTRIES_DIR);
     let path = entries_dir.join(format!("{date}.md"));
 
     if path.exists() {
