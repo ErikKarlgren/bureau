@@ -27,63 +27,81 @@ never commits.
 ## Usage
 
 ```
-bureau report [<when>] [--from <date>] [--to <date>] [--no-diff]
-              [--filter [<pattern>]] [--menu]
+bureau report [<date>] [--from <date>] [--to <date>] [--no-diff]
+              [--filter <pattern>] [--menu]
 ```
 
 | Argument | Meaning |
 |---|---|
-| `<when>` | One day, in plain English or `YYYY-MM-DD`, e.g. `bureau report yesterday`, `bureau report 2026-09-20`. Expanded to `--from <when> --to <when>`. This is the common case: a single day's report. |
-| `--from <date>` | First day of the period, **inclusive**. Defaults to today when neither it nor `<when>` is given. |
+| `<date>` | One day, in plain English or `YYYY-MM-DD`, e.g. `bureau report yesterday`, `bureau report 2026-09-20`. Expanded to `--from <date> --to <date>`. This is the common case: a single day's report. |
+| `--from <date>` | First day of the period, **inclusive**. Defaults to today when neither it nor `<date>` is given. |
 | `--to <date>` | Last day of the period, **inclusive**. Defaults to today. |
 | `--no-diff` | Omit the whole `# Git diff` section. |
-| `--filter [<pattern>]` | Restrict the report to one dossier, with exactly the rule `bureau worklog` and `bureau tasks` use. |
+| `--filter <pattern>` | Restrict the report to one dossier. **The pattern is required** (unlike `tasks`), so it can never be mistaken for the `<date>` positional; `--menu` is how the picker is asked for. The matching rule is `bureau worklog`'s. |
 | `--menu` | Open the same picker. |
 
 Rules:
 
-- `<when>` and `--from`/`--to` are mutually exclusive; clap enforces it.
+- `<date>` and `--from`/`--to` are mutually exclusive; clap enforces it.
 - `--from` later than `--to` is an error.
 - **No work in the period is an error** (exit 1), not an empty report. A
   period with work logs but no diff is not an error.
 - `--filter` matching nothing is an error; matching several opens the picker,
   as it does everywhere else. Reuse `commands/selection.rs` rather than
   re-deciding.
-- **Open point, deliberately unsettled:** `--filter` takes an optional separate
-  value and report also has the positional `<when>`, so
-  `bureau report --filter yesterday` would read `yesterday` as the pattern
-  rather than the day. Decide when the CLI lands: pair `--filter` with
-  `--from`/`--to`, make report's filter flag-only, or give the pattern another
-  spelling. Do not guess it now.
-- A bare `bureau report` (no `<when>`, no `--from`) **defaults to today**, so
+- `--filter` takes its pattern as a separate **required** value, so the
+  optional-value ambiguity `tasks` has does not exist here: the pattern can
+  never swallow `<date>`. A bare `--filter` is a clap error; `--menu` is how
+  the picker is asked for. `tasks` keeps its optional-value form, since it has
+  no positional to collide with and bare `--filter` there means "the newest
+  dossier".
+- A bare `bureau report` (no `<date>`, no `--from`) **defaults to today**, so
   `bureau report` is "today's report". `--from`/`--to` remain for explicit
   ranges.
 
 ### Helpers
 
-`<when>` is deliberately the only helper in v1: a bare date **is** the single
+`<date>` is deliberately the only helper in v1: a bare date **is** the single
 day. The shape leaves room for `bureau report week` / `bureau report month`
 later without changing what a bare date means. "`day <date>`" as a two-word
 form is not needed while there is only one helper; if more land, revisit.
 
 ## Dates in plain English
 
-`<when>`, `--from` and `--to` accept:
+`<date>`, `--from` and `--to` accept **one argv element** (quote it, the way
+systemd's `--since` expects), case-insensitively, with surrounding and repeated
+whitespace collapsed:
 
 - `YYYY-MM-DD`;
-- `today`, `yesterday`, `tomorrow`;
-- `N days ago`, `N weeks ago`, `N months ago`;
-- `a day ago`, `a week ago`, `a month ago`,
-  and the same forms without `ago` meaning "in the future" (`in a week` is a
-  possible extension, not required).
+- `today`, `yesterday`;
+- `[a|an|one…ten|<digits>] day[s] | week[s] | month[s] | year[s] ago`.
+
+So `a day ago`, `one day ago`, `1 day ago`, `two weeks ago`, `23 months ago`
+and `3 years ago` all parse. Singular and plural are both accepted whatever the
+number (`1 days ago` is not an error), matching how permissive the tasks
+grammar is. Human words stop at `ten`; digits are unbounded.
+
+**Future forms are not accepted** (`tomorrow`, `in a week`). A report about the
+future is empty by construction, and an error saying so is better than a blank
+report.
 
 Parsing is a **pure function** `parse_date(text, today) -> Result<NaiveDate>`
-(and a range wrapper). `today` is injected, so tests never depend on the
-clock. The **resolved ISO dates are what the report prints**, never the raw
-input, so a report stays auditable after the fact.
+(and a range wrapper). `today` is injected, so tests never depend on the clock.
+The **resolved ISO dates are what the report prints**, never the raw input, so
+a report stays auditable after the fact.
 
-This grammar must also be given to `bureau worklog --date <date>` (TBD), so the
-CLI is consistent about what a date is. That work is tracked in `TASKS.md`.
+Arithmetic uses `chrono` and needs no new dependency:
+`NaiveDate::checked_sub_days(Days::new(7 * n))` for days and weeks,
+`checked_sub_months(Months::new(n))` for months, `Months::new(12 * n)` for
+years. `checked_sub_months` **clamps the day to the target month's length**, so
+`Jan 31` minus a month is `Feb 28/29` — the calendar-correct answer a "30 days
+a month" hack gets wrong. `None` becomes an error, never a panic. The base is
+`Local::now().date_naive()`, so local time decides which day "today" is;
+everything after that is `NaiveDate` arithmetic. `chrono::Days` and
+`chrono::Months` are already exported by the version in the lockfile.
+
+This grammar is shared with `bureau worklog --date <date>`; both live in
+`src/date.rs`, and the parity is tracked in `TASKS.md`.
 
 ### Dependency evaluation
 
@@ -213,23 +231,28 @@ With `--filter`, the report is dossier-centric: only the chosen dossier's
   - `head` = `HEAD`, or the newest commit not after `--to` when `--to` is in
     the past;
   - `git diff --follow <base> <head> -- <path>`.
-- **`--follow` requires exactly one path and git ≥ 2.47.** Our diff is already
-  one path per dossier, so that fits. On older git, fall back to rename
-  detection (`-M`/`diff.renames`) and accept that history before a rename may
-  be missed. Browser-wide rename handling (a redirect or a rename map) is out
-  of scope until `bureau rename` exists.
-- **Every flag that affects bytes is pinned**, because `git diff` otherwise
-  inherits user config (`diff.algorithm`, `diff.renames`, `diff.noprefix`,
-  `diff.context`, `color.ui`, `core.autocrlf`, external diffs, textconv
-  filters). The call sets, at minimum:
-  `--no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/
-  -U3` plus `-c diff.noprefix=false -c diff.renames=true
-  -c diff.algorithm=histogram -c color.ui=false`, with `GIT_EXTERNAL_DIFF` and
-  `GIT_DIFF_OPTS` cleared from the child environment. The exact list is pinned
-  by a test so a later change is a decision, not a drift.
-- A git failure while collecting one dossier's diff is a **warning inside the
-  `# Git diff` section**, not a lost report: the daily work is already
-  assembled and the report's core is the notes.
+- **`--follow` requires exactly one path and git ≥ 2.47.** Our diff is one path
+  per dossier, so that fits. Support is probed once by parsing `git --version`
+  (locale-independent), never by matching git's error text, which is localised.
+  When unsupported, print **one warning on stderr** and run the whole section
+  without `--follow`, accepting that history before a rename is missed.
+  Broader rename handling is out of scope until `bureau rename` exists.
+- **User config must not change the bytes or run user tools.** The call pins,
+  explicitly: `--no-ext-diff` (blocks `diff.external`, `GIT_EXTERNAL_DIFF` and
+  external diff drivers — verified against a scratch repo), `--no-textconv`
+  (blocks textconv filters; this repo has `diff.bin.textconv = hexdump -v -C`),
+  `--no-color-moved` (this repo has `diff.colormoved = true`, i.e. zebra move
+  detection, whose moved-line slots are magenta/cyan/blue/yellow),
+  `--ws-error-highlight=none`, `--no-pager`, `-c diff.algorithm=histogram`,
+  `-c diff.renames=true`, `-c diff.noprefix=false`,
+  `-c diff.mnemonicPrefix=false`, and `-c core.quotepath=false` so non-ASCII
+  dossier names are not octal-escaped. `GIT_EXTERNAL_DIFF`, `GIT_DIFF_OPTS` and
+  any `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_*`/`GIT_CONFIG_VALUE_*` pair are
+  cleared from the child environment. The exact list is pinned by a test, so a
+  later change is a decision rather than drift.
+- A git failure while collecting one dossier's diff is a **warning on stderr**,
+  not a lost report: the daily work is already assembled and the report's core
+  is the notes. The dossier's block is omitted rather than printed empty.
 - A dossier that has worklog lines in the period but has since been deleted
   cannot be read, so it is absent from `# Daily work`; its diff cannot be
   attached to a current path. Known v1 gap: the report looks at files that are
@@ -305,15 +328,30 @@ usually piped to a file or an LLM, where colour is off automatically.
 |---|---|
 | `# Daily work`, `# Git diff` | bold, no hue |
 | `## <date>`, `### <dossier>` | bold, no hue |
-| a task marker in entry or worklog content | the `tasks` hue for its state: blue `[ ]`, cyan `[.]`/`[o]`, yellow `[?]`, green `[x]`/`[-]` |
+| a task marker in entry or worklog content | the `tasks` hue for its state: blue `[ ]`, cyan `[.]`/`[o]`, magenta `[?]`, green `[x]`/`[-]` |
 | `{{{ <dossier>` fold marker | bold, no hue |
 | `Report from …` header and everything else | plain |
-| diff body | never coloured |
+| diff body | git's own colours, see below |
 
 The marker rule is the `tasks` one keyed by **state**, not by a listing section:
 `style::Palette::marker` currently takes a `Section`, and report needs the
-section-free form, so `style.rs` gains that mapping. The diff is passed through
-git already uncoloured and is never repainted.
+section-free form, so `style.rs` gains that mapping.
+
+The diff is the one part the report does not paint itself. With colour on it is
+requested from git with `--color=always`; with colour off, `--no-color`. That
+gives the diff red/green, which no other part of the report uses for meaning,
+and git's own slots are pinned so a user's `color.diff.*` cannot add hues:
+`meta` and `frag` are bold with no hue, move detection is off, and the diff
+body is passed through exactly as git emits it. This is the one place two
+colour systems meet, and it is deliberate: re-encoding a diff ourselves would
+mean parsing it.
+
+Warnings (`--follow` unsupported, a git diff that failed) go to **stderr** in
+yellow when colour is on, never to stdout: stdout is the report, and it is fed
+to an LLM.
+
+Yellow is therefore free for warnings: `tasks` now draws the `BLOCKED` rule and
+the `[?]` marker in magenta, so a yellow line in a report is always a warning.
 
 ## Modules
 
@@ -323,7 +361,7 @@ IO at the edge in `commands/report.rs`.
 | File | Change |
 |---|---|
 | `src/report.rs` (new) | Date grammar, range, worklog/entry extraction, grouping, ordering, rendering. Pure functions over `&str` and paths, in the style of `src/tasks.rs` and `src/worklog.rs`. Takes `today` and the diffs as inputs. |
-| `src/date.rs` (new) | `parse_date(text, today)` and the range, shared with `worklog --date` (TBD). Could live in `report.rs`; a separate module is right once `worklog` uses it too. |
+| `src/date.rs` (new) | `parse_date(text, today)`, the relative grammar and the calendar arithmetic, shared by report and `worklog --date`. |
 | `src/commands/report.rs` (new) | Repository root, source discovery (sealed included), git diffs, selection, printing. The `run`/`run_in` split from `commands/tasks.rs`. |
 | `src/git.rs` | Add a read-side `diff` (and the commit resolution it needs) with the pinned flags; reuse `toplevel`. |
 | `src/cli.rs` | `Command::Report(ReportArgs)`. |
@@ -352,14 +390,17 @@ Command (`src/commands/report.rs`):
 
 - No work in the period is an error; a missing `entries/` or `dossiers/`
   directory is not.
-- Git: the diff tests need a real temporary repository (`Scratch` plus
-  `git init` and commits) or an injected differ. `git.rs` is **not**
-  injectable today, unlike the picker and the prompt, so this is a signature
-  decision to make before coding, not after.
-- A rename: `git diff --follow` on a single path still finds the pre-rename
-  history (git ≥ 2.47).
-- The pinned git flags: a repository with a `diff.algorithm` set to something
-  else still produces the same bytes.
+- The differ is **injected into `run_in`**, the way the picker and the prompt
+  are, so command tests supply placeholders instead of calling git and do not
+  depend on the installed git version. Useful fakes, as plain closures: one
+  returning the dossier name as the diff (placement and block order), one
+  returning `Err` (the stderr warning, and that the report still prints), one
+  recording the requests (which dossiers and which range were asked for, and
+  that `--no-diff` never asks), one returning empty (no empty block prints).
+- The real git call is tested in `git.rs` against a scratch repository carrying
+  hostile config (`diff.colormoved`, a `textconv`, `diff.algorithm`,
+  `color.diff.*`) so the pinned flags are proven, and a rename exercises
+  `--follow` where git supports it.
 
 ## Out of scope
 
