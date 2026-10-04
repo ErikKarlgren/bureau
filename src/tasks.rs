@@ -342,36 +342,30 @@ impl Tree {
 
     /// The lines a whole file prints: every bullet, at two spaces per level.
     ///
-    /// Nothing is filtered and no section is consulted, which is what
-    /// `bureau report` needs to print a day's notes as they were written. A
-    /// marker takes the hue its own state earns; everything else is plain.
+    /// Nothing is filtered, no section is consulted and nothing is painted,
+    /// which is what `bureau report` needs to print a day's notes as they were
+    /// written: the report's colour marks its structure, not task state.
     #[must_use]
-    pub fn render_all(&self, palette: Palette) -> Vec<String> {
+    pub fn render_all(&self) -> Vec<String> {
         let mut lines = Vec::new();
 
         for root in &self.roots {
-            self.render_all_node(*root, palette, 0, &mut lines);
+            self.render_all_node(*root, 0, &mut lines);
         }
 
         lines
     }
 
     /// Print one node and everything under it, in document order.
-    fn render_all_node(
-        &self,
-        node: usize,
-        palette: Palette,
-        depth: usize,
-        lines: &mut Vec<String>,
-    ) {
+    fn render_all_node(&self, node: usize, depth: usize, lines: &mut Vec<String>) {
         let Some(current) = self.nodes.get(node) else {
             return;
         };
 
-        lines.push(indent(&render_bullet_state(current, palette), depth));
+        lines.push(indent(&plain_bullet(current), depth));
 
         for child in &current.children {
-            self.render_all_node(*child, palette, depth.saturating_add(1), lines);
+            self.render_all_node(*child, depth.saturating_add(1), lines);
         }
     }
 
@@ -592,24 +586,6 @@ fn plain_bullet(node: &Node) -> String {
         Some(state) if node.text.is_empty() => format!("- [{}]", state.symbol()),
         Some(state) => format!("- [{}] {}", state.symbol(), node.text),
         None => format!("- {}", node.text),
-    }
-}
-
-/// One node as a bullet line at no indentation, its marker hued by its state.
-///
-/// This is `bureau report`'s rule: a task's marker carries the hue its own
-/// state earns, whether or not any listing section would show it, and a bullet
-/// with no marker is plain rather than dim.
-fn render_bullet_state(node: &Node, palette: Palette) -> String {
-    let Some(state) = node.marker else {
-        return plain_bullet(node);
-    };
-
-    let marker = palette.state(state).paint(&format!("[{}]", state.symbol()));
-    if node.text.is_empty() {
-        format!("- {marker}")
-    } else {
-        format!("- {marker} {}", node.text)
     }
 }
 
@@ -1144,24 +1120,24 @@ mod tests {
     }
 
     #[test]
-    fn render_all_prints_every_bullet_in_document_order() {
+    fn render_all_prints_every_bullet_in_document_order_and_plain() {
         let content = "- prose\n  - [ ] todo\n- [x] done\n    - [o] almost\n";
         let expected = lines(&["- prose", "  - [ ] todo", "- [x] done", "  - [o] almost"]);
 
-        assert_eq!(Tree::parse(content).render_all(Palette::OFF), expected);
+        assert_eq!(Tree::parse(content).render_all(), expected);
     }
 
     #[test]
-    fn render_all_hues_a_marker_by_its_own_state() {
+    fn render_all_leaves_every_marker_unpainted() {
         let content = "- [ ] todo\n- [.] doing\n- [o] almost\n- [?] waiting\n- [x] done\n";
         let expected = lines(&[
-            "- \x1b[34m[ ]\x1b[0m todo",
-            "- \x1b[36m[.]\x1b[0m doing",
-            "- \x1b[36m[o]\x1b[0m almost",
-            "- \x1b[35m[?]\x1b[0m waiting",
-            "- \x1b[32m[x]\x1b[0m done",
+            "- [ ] todo",
+            "- [.] doing",
+            "- [o] almost",
+            "- [?] waiting",
+            "- [x] done",
         ]);
 
-        assert_eq!(Tree::parse(content).render_all(Palette::ON), expected);
+        assert_eq!(Tree::parse(content).render_all(), expected);
     }
 }

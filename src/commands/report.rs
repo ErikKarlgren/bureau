@@ -162,7 +162,7 @@ fn run_in(
         dossiers,
         entries,
     };
-    let days = report::days(&input, palette);
+    let days = report::days(&input);
     if !report::has_work(&days) {
         bail!(
             "{}",
@@ -203,7 +203,7 @@ fn run_in(
         }
     }
 
-    Ok((report::render(from, to, &days, &diffs), warnings))
+    Ok((report::render(from, to, &days, &diffs, palette), warnings))
 }
 
 /// The diff of one dossier over the period, as git sees it.

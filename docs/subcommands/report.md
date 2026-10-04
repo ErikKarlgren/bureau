@@ -406,22 +406,35 @@ printed. To keep that true:
 
 ## Colour
 
-Colour reuses `bureau tasks`' palette and its switch: it is drawn only when
-stdout is a terminal, `NO_COLOR` is unset or empty, and `TERM` is not `dumb`.
-It is a redundant encoding, so the plain run loses nothing, and the report is
-usually piped to a file or an LLM, where colour is off automatically.
+Colour reuses the run's palette and its switch: it is drawn only when stdout is
+a terminal, `NO_COLOR` is unset or empty, and `TERM` is not `dumb`. It is a
+redundant encoding, so the plain run loses nothing, and the report is usually
+piped to a file or an LLM, where colour is off automatically.
+
+**The report paints its structure, not its content.** `bureau tasks` hues a
+task's marker by its state, because that state is what the listing is about. A
+report is not a listing: the reader is looking for the day and the dossier, so
+the headings carry the colour and every bullet is printed exactly as it was
+written -- marker, prose and all.
 
 | Line | Drawn in |
 |---|---|
-| `# Report …`, `## Complete git diff` | bold, no hue |
-| `## <date>`, `### <dossier>` | bold, no hue |
-| a task marker in entry or worklog content | the `tasks` hue for its state: blue `[ ]`, cyan `[.]`/`[o]`, magenta `[?]`, green `[x]`/`[-]` |
-| `{{{ git diff` fold marker and `}}}` | bold, no hue |
-| `(No work found)` and everything else | plain |
+| `# Report …` title | bold magenta |
+| `## <date>`, `## Complete git diff` | bold cyan |
+| `### <dossier>`, in either half | bold blue |
+| `{{{ git diff`, `}}}`, and the backtick fence | dim |
+| every bullet, `(No work found)`, `(No git changes were found)`, `(Git changes could not be read)` | plain |
 | diff body | git's own colours, see below |
 
-The marker rule is the `tasks` one keyed by **state**, not by a listing section:
-`style::Palette::state` is that section-free mapping.
+A dossier heading takes the same hue in both halves, which is the point: the
+`### 1234 - …` under a day and the `### 1234 - …` above its diff are visibly
+the same thing. All three heading levels are bold, so what separates them is
+the hue alone -- which is still enough, because the `#`s and the nesting say
+the same thing in the text. The four lines around a diff, its fold markers and
+its backtick fence, are the only machinery left in the document, and dim is
+what says so. The notes are content, so nothing in them is painted: a coloured
+`[x]` here would say the report is about task state, which is `tasks`' claim to
+make, not this command's.
 
 The diff is the one part the report does not paint itself. With colour on it is
 requested from git with `--color=always`; with colour off, `--no-color`. That
@@ -446,14 +459,14 @@ IO at the edge in `commands/report.rs`.
 
 | File | Change |
 |---|---|
-| `src/report.rs` | The `Input`/`Day` model, grouping, ordering and rendering: pure functions over `&str`, in the style of `src/tasks.rs`. `days` takes the palette; the diffs are rendered separately. |
+| `src/report.rs` | The `Input`/`Day` model, grouping, ordering and rendering: pure functions over `&str`, in the style of `src/tasks.rs`. `days` is colour-free; `render` takes the palette and paints only the structure. |
 | `src/date.rs` | `parse` and `range`: the plain-English grammar and the calendar arithmetic, shared by report and `worklog --date`. |
 | `src/commands/report.rs` | Repository root, source discovery (sealed included), entries, the injected differ and picker, printing. The `run`/`run_in` split from `commands/tasks.rs`. |
 | `src/git.rs` | `version`/`follows_renames`, `has_head`, `last_commit`, `empty_tree` and the pinned `diff`. |
 | `src/cli.rs` | `Command::Report(ReportArgs)`. |
 | `src/commands/mod.rs` | One `match` arm. |
-| `src/tasks.rs` | `Tree::render_all`, for printing a day's bullets without a section. |
-| `src/style.rs` | `Palette::state`, the section-free marker hue, and `waiting`/`BLOCKED` moved from yellow to magenta (see Colour). |
+| `src/tasks.rs` | `Tree::render_all`, for printing a day's bullets without a section and without paint. |
+| `src/style.rs` | The report's four structural slots (`title`, `subheading`, `dossier`, `scaffold`), all bold hues but the scaffolding, which is dim. `Palette::state` is gone: the report no longer hues a marker by its state, so nothing wanted it. |
 | `src/worklog.rs` | `worklog_days`, `without_links` and `linked_dossiers`, the readers the report is built from. |
 | `README.md` | The `bureau report` paragraph. |
 
@@ -468,10 +481,12 @@ Pure (`src/report.rs`, `src/date.rs`):
   included, `--no-diff`, the fold markers, the computed fence (a diff holding a
   fence line of its own keeps it inside the block), the first-appearance order
   of the diff blocks, and CRLF.
-- Colour: a terminal run hues each marker by state; a pipe / `NO_COLOR` /
-  `TERM=dumb` prints byte-for-byte the plain report. The diff body is passed
-  through exactly as git emits it, so with colour on it carries git's red and
-  green and with colour off it carries none.
+- Colour: a terminal run hues the title, the `##` headings, the dossier
+  headings and the scaffolding around each diff, and leaves every bullet, note
+  and diff body alone; `Palette::OFF` (a pipe, `NO_COLOR`, `TERM=dumb`) prints
+  byte-for-byte the plain report, with no escape anywhere in it. The diff body
+  is passed through exactly as git emits it, so with colour on it carries git's
+  red and green and with colour off it carries none.
 - A fixture's **full report**, compared byte for byte. This is the format
   regression test, the counterpart of `tasks`' worked example.
 

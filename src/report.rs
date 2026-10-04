@@ -70,7 +70,7 @@ pub enum Changes {
 /// and a dossier or a day whose worklog holds nothing to print is left out
 /// rather than given an empty heading.
 #[must_use]
-pub fn days(input: &Input, palette: Palette) -> Vec<Day> {
+pub fn days(input: &Input) -> Vec<Day> {
     let mut blocks: BTreeMap<NaiveDate, BTreeMap<usize, String>> = BTreeMap::new();
     for (index, dossier) in input.dossiers.iter().enumerate() {
         for (date, block) in &dossier.days {
@@ -100,7 +100,7 @@ pub fn days(input: &Input, palette: Palette) -> Vec<Day> {
         let entry_source = input.entries.get(&date);
         let has_entry = entry_source.is_some();
         let entry = entry_source.map_or_else(Vec::new, |content| {
-            Tree::parse(&worklog::without_links(content)).render_all(palette)
+            Tree::parse(&worklog::without_links(content)).render_all()
         });
         let linked =
             entry_source.map_or_else(Vec::new, |content| worklog::linked_dossiers(content));
@@ -115,7 +115,7 @@ pub fn days(input: &Input, palette: Palette) -> Vec<Day> {
             .filter_map(|index| {
                 let dossier = input.dossiers.get(index)?;
                 let block = blocks.get(&date)?.get(&index)?;
-                let lines = Tree::parse(block).render_all(palette);
+                let lines = Tree::parse(block).render_all();
                 if lines.is_empty() {
                     return None;
                 }
@@ -171,16 +171,27 @@ pub fn dossier_order(days: &[Day]) -> Vec<String> {
 /// section are `##`, and a dossier is `###` under either of them. A diff is
 /// fenced so it renders as code, and wrapped in Neovim fold markers so a
 /// reader can collapse it; the fence is as long as [`fence_width`] says.
+///
+/// Colour marks that structure and nothing else. The title, the two heading
+/// levels and the scaffolding around a diff take a hue; a bullet, a note and a
+/// diff body are printed exactly as they were written, because a report's task
+/// state is not what a reader is looking for.
 #[must_use]
-pub fn render(from: NaiveDate, to: NaiveDate, days: &[Day], diffs: &[(String, Changes)]) -> String {
-    let mut lines = vec![title(from, to)];
+pub fn render(
+    from: NaiveDate,
+    to: NaiveDate,
+    days: &[Day],
+    diffs: &[(String, Changes)],
+    palette: Palette,
+) -> String {
+    let mut lines = vec![palette.title().paint(&title(from, to))];
 
     for (index, day) in days.iter().enumerate() {
         if index > 0 {
             lines.push(String::new());
         }
         lines.push(String::new());
-        lines.push(format!("## {}", day.date));
+        lines.push(palette.subheading().paint(&format!("## {}", day.date)));
 
         if !day.entry.is_empty() {
             lines.extend(day.entry.iter().cloned());
@@ -190,7 +201,7 @@ pub fn render(from: NaiveDate, to: NaiveDate, days: &[Day], diffs: &[(String, Ch
 
         for (name, body) in &day.dossiers {
             lines.push(String::new());
-            lines.push(format!("### {name}"));
+            lines.push(palette.dossier().paint(&format!("### {name}")));
             lines.extend(body.iter().cloned());
         }
     }
@@ -198,24 +209,24 @@ pub fn render(from: NaiveDate, to: NaiveDate, days: &[Day], diffs: &[(String, Ch
     if !diffs.is_empty() {
         lines.push(String::new());
         lines.push(String::new());
-        lines.push(String::from("## Complete git diff"));
+        lines.push(palette.subheading().paint("## Complete git diff"));
 
         for (index, (name, changes)) in diffs.iter().enumerate() {
             if index > 0 {
                 lines.push(String::new());
             }
             lines.push(String::new());
-            lines.push(format!("### {name}"));
+            lines.push(palette.dossier().paint(&format!("### {name}")));
 
             match changes {
                 Changes::Diff(body) => {
-                    lines.push(String::from("{{{ git diff"));
+                    lines.push(palette.scaffold().paint("{{{ git diff"));
 
                     let fence = "`".repeat(fence_width(body));
-                    lines.push(format!("{fence}diff"));
+                    lines.push(palette.scaffold().paint(&format!("{fence}diff")));
                     lines.extend(body.lines().map(str::to_owned));
-                    lines.push(fence);
-                    lines.push(String::from("}}}"));
+                    lines.push(palette.scaffold().paint(&fence));
+                    lines.push(palette.scaffold().paint("}}}"));
                 }
                 Changes::None => lines.push(String::from("(No git changes were found)")),
                 Changes::Unavailable => {
@@ -393,7 +404,7 @@ mod tests {
             &[(first, entry)],
         );
 
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
 
         assert_eq!(days.len(), 1);
         let names: Vec<&str> = days
@@ -419,7 +430,7 @@ mod tests {
             &[],
         );
 
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
 
         let names: Vec<&str> = days
             .first()
@@ -439,7 +450,7 @@ mod tests {
             &[],
         );
 
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
 
         assert_eq!(
             days.first().unwrap().dossiers.first().unwrap().1,
@@ -464,7 +475,7 @@ mod tests {
             &[(first, entry)],
         );
 
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
         let day = days.first().unwrap();
 
         assert_eq!(day.entry, vec!["- [x] filed the ticket"]);
@@ -479,7 +490,7 @@ mod tests {
             &[(first, "# 2026-09-20\n\n## Notes\n- \n")],
         );
 
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
 
         assert_eq!(days.len(), 1);
         assert_eq!(days.first().unwrap().date, first);
@@ -493,7 +504,7 @@ mod tests {
     fn a_worklog_heading_with_nothing_under_it_makes_no_day() {
         let built = input(vec![dossier("A", &[(date(2026, 9, 20), "")])], &[]);
 
-        assert!(days(&built, Palette::OFF).is_empty());
+        assert!(days(&built).is_empty());
     }
 
     #[test]
@@ -502,9 +513,9 @@ mod tests {
             vec![],
             &[(date(2026, 9, 20), "# 2026-09-20\n\n## Notes\n- \n")],
         );
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
 
-        let output = render(built.from, built.to, &days, &[]);
+        let output = render(built.from, built.to, &days, &[], Palette::OFF);
 
         assert!(
             output.contains("## 2026-09-20\n(No work found)\n"),
@@ -516,10 +527,10 @@ mod tests {
     fn a_worklog_day_without_an_entry_is_left_unremarked() {
         let first = date(2026, 9, 20);
         let built = input(vec![dossier("A", &[(first, "- did A\n")])], &[]);
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
 
         assert!(has_work(&days));
-        let output = render(built.from, built.to, &days, &[]);
+        let output = render(built.from, built.to, &days, &[], Palette::OFF);
         assert!(!output.contains("No work found"), "{output}");
     }
 
@@ -565,7 +576,7 @@ mod tests {
     fn a_period_with_no_notes_at_all_has_no_days() {
         let built = input(vec![dossier("A", &[])], &[]);
 
-        assert!(days(&built, Palette::OFF).is_empty());
+        assert!(days(&built).is_empty());
     }
 
     #[test]
@@ -582,7 +593,7 @@ mod tests {
             &[],
         );
 
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
 
         assert_eq!(days.len(), 1);
         assert_eq!(days.first().unwrap().date, date(2026, 9, 10));
@@ -600,7 +611,7 @@ mod tests {
             &[],
         );
 
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
 
         assert_eq!(dossier_order(&days), vec!["B", "A"]);
     }
@@ -609,14 +620,14 @@ mod tests {
     fn renders_the_header_the_days_and_the_diffs() {
         let first = date(2026, 9, 20);
         let built = input(vec![dossier("A", &[(first, "- did A\n")])], &[]);
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
         let diffs = vec![(
             "A".to_owned(),
             Changes::Diff("diff --git a/dossiers/A.md b/dossiers/A.md\n@@ -1 +1 @@\n".to_owned()),
         )];
 
         assert_eq!(
-            render(built.from, built.to, &days, &diffs),
+            render(built.from, built.to, &days, &diffs, Palette::OFF),
             "\
 # Report from 2026-09-01 to 2026-09-30
 
@@ -652,11 +663,11 @@ diff --git a/dossiers/A.md b/dossiers/A.md
     #[test]
     fn a_diffs_own_fence_line_stays_inside_the_block() {
         let built = input(vec![dossier("A", &[(date(2026, 9, 20), "- did A\n")])], &[]);
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
         let body = String::from("diff --git a/A.md b/A.md\n@@ -1,3 +1,3 @@\n ```\n-old\n+new\n");
         let diffs = vec![("A".to_owned(), Changes::Diff(body))];
 
-        let output = render(built.from, built.to, &days, &diffs);
+        let output = render(built.from, built.to, &days, &diffs, Palette::OFF);
 
         assert!(output.contains("````diff\n"), "{output}");
         assert!(output.contains("\n````\n}}}\n"), "{output}");
@@ -665,10 +676,10 @@ diff --git a/dossiers/A.md b/dossiers/A.md
     #[test]
     fn a_dossier_with_no_changes_says_so_under_its_heading() {
         let built = input(vec![dossier("A", &[(date(2026, 9, 20), "- did A\n")])], &[]);
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
         let diffs = vec![("A".to_owned(), Changes::None)];
 
-        let output = render(built.from, built.to, &days, &diffs);
+        let output = render(built.from, built.to, &days, &diffs, Palette::OFF);
 
         assert!(
             output.contains("## Complete git diff\n\n### A\n(No git changes were found)\n"),
@@ -680,10 +691,10 @@ diff --git a/dossiers/A.md b/dossiers/A.md
     #[test]
     fn an_unreadable_diff_is_never_reported_as_no_changes() {
         let built = input(vec![dossier("A", &[(date(2026, 9, 20), "- did A\n")])], &[]);
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
         let diffs = vec![("A".to_owned(), Changes::Unavailable)];
 
-        let output = render(built.from, built.to, &days, &diffs);
+        let output = render(built.from, built.to, &days, &diffs, Palette::OFF);
 
         assert!(
             output.contains("## Complete git diff\n\n### A\n(Git changes could not be read)\n"),
@@ -696,9 +707,9 @@ diff --git a/dossiers/A.md b/dossiers/A.md
     #[test]
     fn an_empty_diff_list_prints_no_section_heading() {
         let built = input(vec![dossier("A", &[(date(2026, 9, 20), "- did A\n")])], &[]);
-        let days = days(&built, Palette::OFF);
+        let days = days(&built);
 
-        let output = render(built.from, built.to, &days, &[]);
+        let output = render(built.from, built.to, &days, &[], Palette::OFF);
 
         assert!(!output.contains("Complete git diff"), "{output}");
     }
@@ -712,24 +723,63 @@ diff --git a/dossiers/A.md b/dossiers/A.md
             &[(first, entry)],
         );
 
-        let output = render(built.from, built.to, &days(&built, Palette::OFF), &[]);
+        let output = render(built.from, built.to, &days(&built), &[], Palette::OFF);
 
         assert!(!output.contains('\r'), "{output:?}");
     }
 
     #[test]
-    fn a_coloured_run_hues_the_markers_by_state() {
+    fn a_coloured_run_hues_the_structure_and_nothing_else() {
         let first = date(2026, 9, 20);
         let built = input(
             vec![dossier("A", &[(first, "- [ ] todo\n- [?] waiting\n")])],
             &[],
         );
+        let days = days(&built);
+        let diffs = vec![(
+            "A".to_owned(),
+            Changes::Diff("diff --git a/A.md b/A.md\n@@ -1 +1 @@\n".to_owned()),
+        )];
 
-        let days = days(&built, Palette::ON);
-        let body = &days.first().unwrap().dossiers.first().unwrap().1;
+        let output = render(built.from, built.to, &days, &diffs, Palette::ON);
 
-        assert_eq!(body.len(), 2);
-        assert_eq!(body.first().unwrap(), "- \x1b[34m[ ]\x1b[0m todo");
-        assert_eq!(body.get(1).unwrap(), "- \x1b[35m[?]\x1b[0m waiting");
+        assert!(
+            output.contains("\x1b[1;35m# Report from 2026-09-01 to 2026-09-30\x1b[0m"),
+            "{output}"
+        );
+        assert!(
+            output.contains("\x1b[1;36m## 2026-09-20\x1b[0m"),
+            "{output}"
+        );
+        assert!(
+            output.contains("\x1b[1;36m## Complete git diff\x1b[0m"),
+            "{output}"
+        );
+        assert!(output.contains("\x1b[1;34m### A\x1b[0m"), "{output}");
+        assert!(output.contains("\x1b[2m{{{ git diff\x1b[0m"), "{output}");
+        assert!(output.contains("\x1b[2m```diff\x1b[0m"), "{output}");
+        assert!(output.contains("\x1b[2m```\x1b[0m"), "{output}");
+        assert!(output.contains("\x1b[2m}}}\x1b[0m"), "{output}");
+
+        // The notes keep their markers exactly as written, and the diff body
+        // is git's to paint.
+        assert!(output.contains("- [ ] todo"), "{output}");
+        assert!(output.contains("- [?] waiting"), "{output}");
+        assert!(!output.contains("[34m[ ]"), "{output}");
+        assert!(output.contains("diff --git a/A.md b/A.md"), "{output}");
+    }
+
+    #[test]
+    fn colour_off_draws_the_report_as_plain_text() {
+        let built = input(
+            vec![dossier("A", &[(date(2026, 9, 20), "- [ ] todo\n")])],
+            &[],
+        );
+        let days = days(&built);
+        let diffs = vec![("A".to_owned(), Changes::None)];
+
+        let output = render(built.from, built.to, &days, &diffs, Palette::OFF);
+
+        assert!(!output.contains('\x1b'), "{output:?}");
     }
 }

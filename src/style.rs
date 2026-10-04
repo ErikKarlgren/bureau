@@ -49,6 +49,7 @@ const GREEN: Style = Style { open: "\x1b[32m" };
 const DIM: Style = Style { open: "\x1b[2m" };
 const BOLD: Style = Style { open: "\x1b[1m" };
 const BOLD_BLUE: Style = Style { open: "\x1b[1;34m" };
+const BOLD_CYAN: Style = Style { open: "\x1b[1;36m" };
 const BOLD_MAGENTA: Style = Style { open: "\x1b[1;35m" };
 const BOLD_GREEN: Style = Style { open: "\x1b[1;32m" };
 const BOLD_YELLOW: Style = Style { open: "\x1b[1;33m" };
@@ -74,6 +75,13 @@ pub struct Palette {
     context_style: Style,
     /// A warning, which goes to stderr rather than into the report.
     warning_style: Style,
+    /// The report's own structure, which `tasks` never asks for: its title, its
+    /// `##` headings (a day, the diff section), its `###` dossier headings, and
+    /// the scaffolding around a diff (its fold markers and its backtick fence).
+    title_style: Style,
+    subheading_style: Style,
+    dossier_style: Style,
+    scaffold_style: Style,
 }
 
 impl Palette {
@@ -89,10 +97,16 @@ impl Palette {
         heading_style: Style::NONE,
         context_style: Style::NONE,
         warning_style: Style::NONE,
+        title_style: Style::NONE,
+        subheading_style: Style::NONE,
+        dossier_style: Style::NONE,
+        scaffold_style: Style::NONE,
     };
 
     /// Blue for what can be picked up, cyan for what has been started, magenta
-    /// for what is waiting on somebody else, green for what is over.
+    /// for what is waiting on somebody else, green for what is over. The report
+    /// draws structure instead of state: a bold magenta title, bold cyan `##`
+    /// headings, bold blue dossier headings, and dim scaffolding around a diff.
     pub const ON: Self = Self {
         actionable: BOLD_BLUE,
         blocked: BOLD_MAGENTA,
@@ -104,6 +118,10 @@ impl Palette {
         heading_style: BOLD,
         context_style: DIM,
         warning_style: BOLD_YELLOW,
+        title_style: BOLD_MAGENTA,
+        subheading_style: BOLD_CYAN,
+        dossier_style: BOLD_BLUE,
+        scaffold_style: DIM,
     };
 
     /// The style a section's rule is drawn in.
@@ -146,25 +164,37 @@ impl Palette {
         }
     }
 
-    /// The style a task's marker is drawn in, whatever section it is in.
-    ///
-    /// `bureau report` prints a day's notes outside any listing section, so it
-    /// needs the hue a marker's state earns on its own rather than the hue a
-    /// section gives it.
-    #[must_use]
-    pub const fn state(self, state: State) -> Style {
-        match state {
-            State::Todo => self.todo,
-            State::Doing | State::Almost => self.started,
-            State::Waiting => self.waiting,
-            State::Done | State::Cancelled => self.done,
-        }
-    }
-
     /// The style a source heading is drawn in.
     #[must_use]
     pub const fn heading(self) -> Style {
         self.heading_style
+    }
+
+    /// The style the report's title is drawn in.
+    #[must_use]
+    pub const fn title(self) -> Style {
+        self.title_style
+    }
+
+    /// The style the report's `##` headings are drawn in: a day, and the diff
+    /// section as a whole.
+    #[must_use]
+    pub const fn subheading(self) -> Style {
+        self.subheading_style
+    }
+
+    /// The style a dossier's `###` heading is drawn in, in either half of the
+    /// report.
+    #[must_use]
+    pub const fn dossier(self) -> Style {
+        self.dossier_style
+    }
+
+    /// The style the scaffolding around a diff is drawn in: the fold markers
+    /// and the backtick fence, which are machinery rather than content.
+    #[must_use]
+    pub const fn scaffold(self) -> Style {
+        self.scaffold_style
     }
 
     /// The style a line that only leads to a task is drawn in.
@@ -300,6 +330,10 @@ mod tests {
             palette.section(Section::Finished),
             palette.heading(),
             palette.context(),
+            palette.title(),
+            palette.subheading(),
+            palette.dossier(),
+            palette.scaffold(),
             palette
                 .marker(Section::Actionable, State::Todo)
                 .unwrap_or(Style::NONE),
@@ -340,6 +374,16 @@ mod tests {
         );
         assert_eq!(palette.context().paint("- [x] context"), "- [x] context");
         assert_eq!(
+            palette.title().paint("# Report for 2026-09-20"),
+            "# Report for 2026-09-20"
+        );
+        assert_eq!(palette.subheading().paint("## 2026-09-20"), "## 2026-09-20");
+        assert_eq!(
+            palette.dossier().paint("### 1 - a dossier"),
+            "### 1 - a dossier"
+        );
+        assert_eq!(palette.scaffold().paint("{{{ git diff"), "{{{ git diff");
+        assert_eq!(
             palette
                 .marker(Section::Actionable, State::Todo)
                 .map(|s| s.paint("[ ]")),
@@ -348,33 +392,26 @@ mod tests {
     }
 
     #[test]
-    fn every_state_has_a_hue_of_its_own() {
+    fn the_report_draws_structure_not_state() {
         let palette = Palette::ON;
 
         assert_eq!(
-            palette.state(State::Todo).paint("[ ]"),
-            "\x1b[34m[ ]\x1b[0m"
+            palette.title().paint("# Report for 2026-09-20"),
+            "\x1b[1;35m# Report for 2026-09-20\x1b[0m"
         );
         assert_eq!(
-            palette.state(State::Doing).paint("[.]"),
-            "\x1b[36m[.]\x1b[0m"
+            palette.subheading().paint("## Complete git diff"),
+            "\x1b[1;36m## Complete git diff\x1b[0m"
         );
         assert_eq!(
-            palette.state(State::Almost).paint("[o]"),
-            "\x1b[36m[o]\x1b[0m"
+            palette.dossier().paint("### 1234 - a dossier"),
+            "\x1b[1;34m### 1234 - a dossier\x1b[0m"
         );
         assert_eq!(
-            palette.state(State::Waiting).paint("[?]"),
-            "\x1b[35m[?]\x1b[0m"
+            palette.scaffold().paint("{{{ git diff"),
+            "\x1b[2m{{{ git diff\x1b[0m"
         );
-        assert_eq!(
-            palette.state(State::Done).paint("[x]"),
-            "\x1b[32m[x]\x1b[0m"
-        );
-        assert_eq!(
-            palette.state(State::Cancelled).paint("[-]"),
-            "\x1b[32m[-]\x1b[0m"
-        );
+        assert_eq!(palette.scaffold().paint("```diff"), "\x1b[2m```diff\x1b[0m");
     }
 
     #[test]
