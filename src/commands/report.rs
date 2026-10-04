@@ -123,11 +123,20 @@ fn run_in(
     );
 
     let mut dossiers = Vec::new();
+    let mut scope = None;
     for path in &chosen {
         let contents = fs::read_to_string(path)
             .with_context(|| format!("could not read '{}'", path.display()))?;
+        let name = worklog::stem(path);
+
+        // A filtered report says which dossier it is about, by the name the
+        // dossier gives itself rather than the one its file had to take.
+        if selected.as_ref() == Some(path) {
+            scope = Some(report::dossier_title(&contents, &name));
+        }
+
         dossiers.push(Dossier {
-            name: worklog::stem(path),
+            name,
             days: worklog::worklog_days(&contents),
         });
     }
@@ -203,7 +212,10 @@ fn run_in(
         }
     }
 
-    Ok((report::render(from, to, &days, &diffs, palette), warnings))
+    Ok((
+        report::render(from, to, &days, &diffs, scope.as_deref(), palette),
+        warnings,
+    ))
 }
 
 /// The diff of one dossier over the period, as git sees it.
@@ -308,8 +320,9 @@ mod tests {
             output.contains("# Report from 2026-09-01 to 2026-09-30"),
             "{output}"
         );
-        assert!(output.contains("## 2026-09-20"), "{output}");
-        assert!(output.contains("- [ ] buy shampoo"), "{output}");
+        assert!(output.contains("## 2026-09-20 (Sunday)"), "{output}");
+        assert!(!output.contains("Dossier:"), "{output}");
+        assert!(output.contains("### Notes\n- [ ] buy shampoo"), "{output}");
         assert!(output.contains("### A\n- did A"), "{output}");
         assert!(
             output.contains("{{{ git diff\n```diff\ndiff of "),
@@ -365,7 +378,7 @@ mod tests {
         assert!(!called.get(), "the differ was asked for a diff");
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(output.contains("### A"), "{output}");
-        assert!(!output.contains("Complete git diff"), "{output}");
+        assert!(!output.contains("## Git diff"), "{output}");
     }
 
     #[test]
@@ -390,7 +403,7 @@ mod tests {
         );
         assert!(output.contains("### A"), "{output}");
         assert!(
-            output.contains("## Complete git diff\n\n### A\n(Git changes could not be read)\n"),
+            output.contains("## Git diff\n\n### A\n(Git changes could not be read)\n"),
             "{output}"
         );
         assert!(!output.contains("No git changes were found"), "{output}");
@@ -413,7 +426,7 @@ mod tests {
 
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(
-            output.contains("## Complete git diff\n\n### A\n(No git changes were found)\n"),
+            output.contains("## Git diff\n\n### A\n(No git changes were found)\n"),
             "{output}"
         );
         assert!(!output.contains("{{{ git diff"), "{output}");
@@ -529,7 +542,7 @@ mod tests {
         assert!(warnings.is_empty(), "{warnings:?}");
         assert!(output.contains("### A\n- did A"), "{output}");
         assert!(
-            output.contains("## 2026-09-21\n(No work found)"),
+            output.contains("## 2026-09-21 (Monday)\n(No work found)"),
             "{output}"
         );
     }
@@ -596,6 +609,29 @@ mod tests {
         assert!(output.contains("### B"), "{output}");
         assert!(!output.contains("### A"), "{output}");
         assert!(!output.contains("entry note"), "{output}");
+        assert!(output.contains("\nDossier: B\n"), "{output}");
+    }
+
+    #[test]
+    fn a_filtered_report_names_the_dossier_as_it_names_itself() {
+        let scratch = Scratch::new("report-scope").unwrap();
+        scratch
+            .write(
+                "dossiers/a_b.md",
+                "# a::b\n\n## Worklog\n### 2026-09-20\n- did the thing\n",
+            )
+            .unwrap();
+
+        let mut args = args();
+        args.filter = Some("a_b".to_owned());
+
+        let (output, _) = run_report(&scratch, &args).unwrap();
+
+        assert!(
+            output.starts_with("# Report from 2026-09-01 to 2026-09-30\n\nDossier: a::b\n"),
+            "{output:?}"
+        );
+        assert!(output.contains("### a_b"), "{output}");
     }
 
     #[test]

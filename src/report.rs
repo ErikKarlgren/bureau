@@ -99,9 +99,7 @@ pub fn days(input: &Input) -> Vec<Day> {
     for date in dates {
         let entry_source = input.entries.get(&date);
         let has_entry = entry_source.is_some();
-        let entry = entry_source.map_or_else(Vec::new, |content| {
-            Tree::parse(&worklog::without_links(content)).render_all()
-        });
+        let entry = entry_source.map_or_else(Vec::new, |content| entry_lines(content));
         let linked =
             entry_source.map_or_else(Vec::new, |content| worklog::linked_dossiers(content));
 
@@ -168,9 +166,13 @@ pub fn dossier_order(days: &[Day]) -> Vec<String> {
 /// asks for and what a report with no dossier work produces anyway.
 ///
 /// One heading level per thing: the title names the period, a day and the diff
-/// section are `##`, and a dossier is `###` under either of them. A diff is
-/// fenced so it renders as code, and wrapped in Neovim fold markers so a
+/// section are `##`, and a dossier is `###` under either of them. A day carries
+/// its weekday, a filtered report names the dossier under the title, and a
+/// diff is fenced so it renders as code and wrapped in Neovim fold markers so a
 /// reader can collapse it; the fence is as long as [`fence_width`] says.
+///
+/// Blank lines group the document: two before a `##`, one before a `###`,
+/// whatever stands above -- the title alone, or the title and a scope line.
 ///
 /// Colour marks that structure and nothing else. The title, the two heading
 /// levels and the scaffolding around a diff take a hue; a bullet, a note and a
@@ -182,16 +184,24 @@ pub fn render(
     to: NaiveDate,
     days: &[Day],
     diffs: &[(String, Changes)],
+    scope: Option<&str>,
     palette: Palette,
 ) -> String {
     let mut lines = vec![palette.title().paint(&title(from, to))];
 
-    for (index, day) in days.iter().enumerate() {
-        if index > 0 {
-            lines.push(String::new());
-        }
+    if let Some(scope) = scope {
         lines.push(String::new());
-        lines.push(palette.subheading().paint(&format!("## {}", day.date)));
+        lines.push(format!("Dossier: {scope}"));
+    }
+
+    for day in days {
+        lines.push(String::new());
+        lines.push(String::new());
+        lines.push(palette.subheading().paint(&format!(
+            "## {} ({})",
+            day.date,
+            day.date.format("%A")
+        )));
 
         if !day.entry.is_empty() {
             lines.extend(day.entry.iter().cloned());
@@ -209,7 +219,7 @@ pub fn render(
     if !diffs.is_empty() {
         lines.push(String::new());
         lines.push(String::new());
-        lines.push(palette.subheading().paint("## Complete git diff"));
+        lines.push(palette.subheading().paint("## Git diff"));
 
         for (index, (name, changes)) in diffs.iter().enumerate() {
             if index > 0 {
@@ -248,6 +258,115 @@ fn title(from: NaiveDate, to: NaiveDate) -> String {
     } else {
         format!("# Report from {from} to {to}")
     }
+}
+
+/// A dossier's name as the dossier writes it in its own file.
+///
+/// A file name cannot hold everything a dossier name can -- `::` becomes `_` on
+/// the way to disk -- so a report says the name the dossier gives itself. A
+/// file with no `# ` title falls back to `fallback`, the file's stem.
+#[must_use]
+pub fn dossier_title(content: &str, fallback: &str) -> String {
+    content
+        .lines()
+        .find_map(|line| heading_text(line, 1))
+        .filter(|title| !title.is_empty())
+        .map_or_else(|| fallback.to_owned(), str::to_owned)
+}
+
+/// The lines one entry contributes to its day.
+///
+/// The entry's own sections become the day's sections, one `#` deeper: its
+/// `## Notes` prints as `### Notes`, and every level below goes one deeper
+/// again. A heading prints when work sits under it, directly or in a
+/// subsection of its own, so a section left empty does not print as an empty
+/// heading; the entry's `# <date>` title is dropped because the day heading
+/// already says it, and `## Worked on Dossiers` is dropped because the
+/// dossiers print as blocks of their own. Prose is still out of scope: only
+/// headings and bullets survive.
+fn entry_lines(content: &str) -> Vec<String> {
+    let text = worklog::without_links(content);
+    let mut lines = Vec::new();
+    let mut pending: Vec<(usize, String)> = Vec::new();
+    let mut level = 0;
+    let mut heading: Option<String> = None;
+    let mut body = String::new();
+
+    for line in text.split_inclusive('\n') {
+        if let Some(found) = heading_level(line) {
+            flush(&mut lines, &mut pending, level, heading.take(), &body);
+            body.clear();
+
+            level = if found > 1 { found } else { 0 };
+            heading = (found > 1).then(|| demote(line));
+        } else {
+            body.push_str(line);
+        }
+    }
+
+    flush(&mut lines, &mut pending, level, heading, &body);
+    lines
+}
+
+/// Close one entry section, printing the headings that found work under them.
+///
+/// `pending` holds the headings opened but not yet printed. A heading at or
+/// above one of them closes it: whatever that section was going to hold, it
+/// will not hold this. Bullets print the whole pending chain with them, so a
+/// `###` section keeps the `##` it belongs to -- unless that `##` never had
+/// work under it, in which case nothing prints it at all.
+fn flush(
+    lines: &mut Vec<String>,
+    pending: &mut Vec<(usize, String)>,
+    level: usize,
+    heading: Option<String>,
+    body: &str,
+) {
+    while pending.last().is_some_and(|(opened, _)| *opened >= level) {
+        pending.pop();
+    }
+
+    if let Some(heading) = heading {
+        pending.push((level, heading));
+    }
+
+    let bullets = Tree::parse(body).render_all();
+    if bullets.is_empty() {
+        return;
+    }
+
+    lines.extend(pending.drain(..).map(|(_, heading)| heading));
+    lines.extend(bullets);
+}
+
+/// A heading line, one level deeper.
+fn demote(line: &str) -> String {
+    format!("#{}", line.trim_end_matches(['\r', '\n']))
+}
+
+/// The level of an ATX heading line, or `None` when the line is not one.
+///
+/// The `#`s have to open the line: an indented heading is read as prose, as is
+/// a run of seven or more, which markdown does not treat as a heading either.
+fn heading_level(line: &str) -> Option<usize> {
+    let hashes = line
+        .len()
+        .saturating_sub(line.trim_start_matches('#').len());
+    if hashes == 0 || hashes > 6 {
+        return None;
+    }
+
+    let rest = line.get(hashes..)?.trim_end_matches(['\r', '\n']);
+    (rest.is_empty() || rest.starts_with(' ')).then_some(hashes)
+}
+
+/// The text of a heading at `level`, without its `#`s.
+fn heading_text(line: &str, level: usize) -> Option<&str> {
+    if heading_level(line) != Some(level) {
+        return None;
+    }
+
+    line.get(level..).map(str::trim)
 }
 
 /// How many backticks a fence around `body` needs.
@@ -478,8 +597,119 @@ mod tests {
         let days = days(&built);
         let day = days.first().unwrap();
 
-        assert_eq!(day.entry, vec!["- [x] filed the ticket"]);
+        assert_eq!(day.entry, vec!["### Notes", "- [x] filed the ticket"]);
         assert_eq!(day.dossiers.len(), 1);
+    }
+
+    #[test]
+    fn an_entry_prints_its_own_sections_one_level_deeper() {
+        let first = date(2026, 9, 20);
+        let entry = "\
+# 2026-09-20
+
+## Notes
+- [ ] buy shampoo
+
+## Worked on Tasks
+- filed the ticket
+
+## Worked on Dossiers
+- [A](<../dossiers/A.md>)
+";
+        let built = input(
+            vec![dossier("A", &[(first, "- did A\n")])],
+            &[(first, entry)],
+        );
+
+        let days = days(&built);
+
+        assert_eq!(
+            days.first().unwrap().entry,
+            vec![
+                "### Notes",
+                "- [ ] buy shampoo",
+                "### Worked on Tasks",
+                "- filed the ticket",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_entry_section_left_empty_is_not_printed() {
+        let first = date(2026, 9, 20);
+        let entry = "# 2026-09-20\n\n## Notes\n- [x] a task\n\n## Worked on Tasks\n- \n";
+        let built = input(vec![], &[(first, entry)]);
+
+        let days = days(&built);
+
+        assert_eq!(
+            days.first().unwrap().entry,
+            vec!["### Notes", "- [x] a task"]
+        );
+    }
+
+    #[test]
+    fn a_nested_entry_section_keeps_its_parent() {
+        let first = date(2026, 9, 20);
+        let entry = "# 2026-09-20\n\n## Notes\n### Sub\n- [x] a task\n";
+        let built = input(vec![], &[(first, entry)]);
+
+        let days = days(&built);
+
+        assert_eq!(
+            days.first().unwrap().entry,
+            vec!["### Notes", "#### Sub", "- [x] a task"]
+        );
+    }
+
+    #[test]
+    fn a_dossier_is_named_by_its_own_title() {
+        let content = "# a::b\n- Creation date: 2026-09-19\n\n## Worklog\n";
+
+        assert_eq!(dossier_title(content, "a_b"), "a::b");
+    }
+
+    #[test]
+    fn a_dossier_without_a_title_falls_back_to_its_file() {
+        assert_eq!(dossier_title("## Worklog\n", "a_b"), "a_b");
+        assert_eq!(dossier_title("# \n## Worklog\n", "a_b"), "a_b");
+    }
+
+    #[test]
+    fn an_unfiltered_report_leaves_two_blank_lines_under_the_title() {
+        let first = date(2026, 9, 20);
+        let built = input(vec![dossier("A", &[(first, "- did A\n")])], &[]);
+
+        let output = render(built.from, built.to, &days(&built), &[], None, Palette::OFF);
+
+        assert!(
+            output.starts_with(
+                "# Report from 2026-09-01 to 2026-09-30\n\n\n## 2026-09-20 (Sunday)\n"
+            ),
+            "{output:?}"
+        );
+    }
+
+    #[test]
+    fn a_filtered_report_names_its_dossier_under_the_title() {
+        let first = date(2026, 9, 20);
+        let built = input(vec![dossier("A", &[(first, "- did A\n")])], &[]);
+
+        let output = render(
+            built.from,
+            built.to,
+            &days(&built),
+            &[],
+            Some("a::b"),
+            Palette::OFF,
+        );
+
+        assert!(
+            output.starts_with(
+                "# Report from 2026-09-01 to 2026-09-30\n\nDossier: a::b\n\n\n## 2026-09-20 (Sunday)\n"
+            ),
+            "{output:?}"
+        );
     }
 
     #[test]
@@ -515,10 +745,10 @@ mod tests {
         );
         let days = days(&built);
 
-        let output = render(built.from, built.to, &days, &[], Palette::OFF);
+        let output = render(built.from, built.to, &days, &[], None, Palette::OFF);
 
         assert!(
-            output.contains("## 2026-09-20\n(No work found)\n"),
+            output.contains("## 2026-09-20 (Sunday)\n(No work found)\n"),
             "{output}"
         );
     }
@@ -530,7 +760,7 @@ mod tests {
         let days = days(&built);
 
         assert!(has_work(&days));
-        let output = render(built.from, built.to, &days, &[], Palette::OFF);
+        let output = render(built.from, built.to, &days, &[], None, Palette::OFF);
         assert!(!output.contains("No work found"), "{output}");
     }
 
@@ -627,17 +857,18 @@ mod tests {
         )];
 
         assert_eq!(
-            render(built.from, built.to, &days, &diffs, Palette::OFF),
+            render(built.from, built.to, &days, &diffs, None, Palette::OFF),
             "\
 # Report from 2026-09-01 to 2026-09-30
 
-## 2026-09-20
+
+## 2026-09-20 (Sunday)
 
 ### A
 - did A
 
 
-## Complete git diff
+## Git diff
 
 ### A
 {{{ git diff
@@ -667,7 +898,7 @@ diff --git a/dossiers/A.md b/dossiers/A.md
         let body = String::from("diff --git a/A.md b/A.md\n@@ -1,3 +1,3 @@\n ```\n-old\n+new\n");
         let diffs = vec![("A".to_owned(), Changes::Diff(body))];
 
-        let output = render(built.from, built.to, &days, &diffs, Palette::OFF);
+        let output = render(built.from, built.to, &days, &diffs, None, Palette::OFF);
 
         assert!(output.contains("````diff\n"), "{output}");
         assert!(output.contains("\n````\n}}}\n"), "{output}");
@@ -679,10 +910,10 @@ diff --git a/dossiers/A.md b/dossiers/A.md
         let days = days(&built);
         let diffs = vec![("A".to_owned(), Changes::None)];
 
-        let output = render(built.from, built.to, &days, &diffs, Palette::OFF);
+        let output = render(built.from, built.to, &days, &diffs, None, Palette::OFF);
 
         assert!(
-            output.contains("## Complete git diff\n\n### A\n(No git changes were found)\n"),
+            output.contains("## Git diff\n\n### A\n(No git changes were found)\n"),
             "{output}"
         );
         assert!(!output.contains("{{{ git diff"), "{output}");
@@ -694,10 +925,10 @@ diff --git a/dossiers/A.md b/dossiers/A.md
         let days = days(&built);
         let diffs = vec![("A".to_owned(), Changes::Unavailable)];
 
-        let output = render(built.from, built.to, &days, &diffs, Palette::OFF);
+        let output = render(built.from, built.to, &days, &diffs, None, Palette::OFF);
 
         assert!(
-            output.contains("## Complete git diff\n\n### A\n(Git changes could not be read)\n"),
+            output.contains("## Git diff\n\n### A\n(Git changes could not be read)\n"),
             "{output}"
         );
         assert!(!output.contains("No git changes were found"), "{output}");
@@ -709,9 +940,9 @@ diff --git a/dossiers/A.md b/dossiers/A.md
         let built = input(vec![dossier("A", &[(date(2026, 9, 20), "- did A\n")])], &[]);
         let days = days(&built);
 
-        let output = render(built.from, built.to, &days, &[], Palette::OFF);
+        let output = render(built.from, built.to, &days, &[], None, Palette::OFF);
 
-        assert!(!output.contains("Complete git diff"), "{output}");
+        assert!(!output.contains("## Git diff"), "{output}");
     }
 
     #[test]
@@ -723,7 +954,7 @@ diff --git a/dossiers/A.md b/dossiers/A.md
             &[(first, entry)],
         );
 
-        let output = render(built.from, built.to, &days(&built), &[], Palette::OFF);
+        let output = render(built.from, built.to, &days(&built), &[], None, Palette::OFF);
 
         assert!(!output.contains('\r'), "{output:?}");
     }
@@ -741,20 +972,17 @@ diff --git a/dossiers/A.md b/dossiers/A.md
             Changes::Diff("diff --git a/A.md b/A.md\n@@ -1 +1 @@\n".to_owned()),
         )];
 
-        let output = render(built.from, built.to, &days, &diffs, Palette::ON);
+        let output = render(built.from, built.to, &days, &diffs, None, Palette::ON);
 
         assert!(
             output.contains("\x1b[1;35m# Report from 2026-09-01 to 2026-09-30\x1b[0m"),
             "{output}"
         );
         assert!(
-            output.contains("\x1b[1;36m## 2026-09-20\x1b[0m"),
+            output.contains("\x1b[1;36m## 2026-09-20 (Sunday)\x1b[0m"),
             "{output}"
         );
-        assert!(
-            output.contains("\x1b[1;36m## Complete git diff\x1b[0m"),
-            "{output}"
-        );
+        assert!(output.contains("\x1b[1;36m## Git diff\x1b[0m"), "{output}");
         assert!(output.contains("\x1b[1;34m### A\x1b[0m"), "{output}");
         assert!(output.contains("\x1b[2m{{{ git diff\x1b[0m"), "{output}");
         assert!(output.contains("\x1b[2m```diff\x1b[0m"), "{output}");
@@ -778,7 +1006,7 @@ diff --git a/dossiers/A.md b/dossiers/A.md
         let days = days(&built);
         let diffs = vec![("A".to_owned(), Changes::None)];
 
-        let output = render(built.from, built.to, &days, &diffs, Palette::OFF);
+        let output = render(built.from, built.to, &days, &diffs, None, Palette::OFF);
 
         assert!(!output.contains('\x1b'), "{output:?}");
     }

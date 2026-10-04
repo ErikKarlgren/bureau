@@ -36,7 +36,7 @@ bureau report [<date>] [--from <date>] [--to <date>] [--no-diff]
 | `<date>` | One day, in plain English or `YYYY-MM-DD`, e.g. `bureau report yesterday`, `bureau report 2026-09-20`. Expanded to `--from <date> --to <date>`. This is the common case: a single day's report. |
 | `--from <date>` | First day of the period, **inclusive**. Defaults to today when neither it nor `<date>` is given. |
 | `--to <date>` | Last day of the period, **inclusive**. Defaults to today. |
-| `--no-diff` | Omit the whole `## Complete git diff` section. |
+| `--no-diff` | Omit the whole `## Git diff` section. |
 | `--filter <pattern>` | Restrict the report to one dossier. **The pattern is required** (unlike `tasks`), so it can never be mistaken for the `<date>` positional; `--menu` is how the picker is asked for. The matching rule is `bureau worklog`'s. |
 | `--menu` | Open the same picker. |
 
@@ -149,8 +149,8 @@ tool always has one to inspect; but a worklog written by hand, or one whose
 entry was deleted afterwards, still reports on its own, and is never an error
 about a missing entry.
 
-An entry that renders no bullets still makes the day. In a period that has work
-in it, such a day prints its heading followed by `(No work found)` rather than a
+An entry that renders nothing still makes the day. In a period that has work in
+it, such a day prints its heading followed by `(No work found)` rather than a
 bare heading. A day whose only trace is an empty `### date` heading -- no
 entry, no worklog lines -- is left out entirely.
 
@@ -175,7 +175,9 @@ records the logical day. **Bureau never backdates a commit.**
 ````
 # Report from 2026-09-20 to 2026-10-01
 
-## 2026-09-20
+
+## 2026-09-20 (Sunday)
+### Notes
 - [ ] buy shampoo
   - the green one
 
@@ -187,18 +189,19 @@ records the logical day. **Bureau never backdates a commit.**
 - bought a GPU
 
 
-## 2026-09-21
+## 2026-09-21 (Monday)
+### Notes
 - [x] filed the ticket
 
 ### 1234 - killing goblins was never an option
 - got a magical wand
 
 
-## 2026-09-22
+## 2026-09-22 (Tuesday)
 (No work found)
 
 
-## Complete git diff
+## Git diff
 
 ### 1234 - killing goblins was never an option
 {{{ git diff
@@ -222,7 +225,22 @@ diff --git a/dossiers/9820 - mine crypto.md b/dossiers/9820 - mine crypto.md
 (No git changes were found)
 ````
 
-(The outer fence here is four backticks because the example contains three:
+A `--filter`ed report carries its scope under the title instead of the day's
+own notes:
+
+````
+# Report for 2026-09-20
+
+Dossier: 1234 - killing goblins was never an option
+
+
+## 2026-09-20 (Sunday)
+
+### 1234 - killing goblins was never an option
+- killed 23 goblins
+````
+
+(The outer fences here are four backticks because the examples contain three:
 the same rule the report itself follows, see below.)
 
 Shape rules:
@@ -230,14 +248,22 @@ Shape rules:
 - The title prints the **resolved** ISO dates: `# Report for <date>` for a
   single day, `# Report from <from> to <to>` for a range. The raw `a week ago`
   is not echoed, and a one-day report is never written as a range.
+- A filtered report prints `Dossier: <title>` under the title, where the title
+  is the name the dossier writes at the top of its own file rather than the one
+  its file name had to take: a dossier called `a::b` lives in `a_b.md` and is
+  named `a::b` here. A dossier with no `# ` title falls back to its file stem.
 - One heading level per thing: the title is the only `#`, a day and the diff
-  section are `##`, and a dossier is `###` under either of them.
-- A heading is followed immediately by its content. One blank line precedes a
-  `###`, two precede a `##`, which is what groups a day and its dossiers into
-  one block while keeping consecutive days apart.
+  section are `##`, and a dossier is `###` under either of them. A day heading
+  carries its weekday, `## 2027-01-02 (Monday)`, so a reader does not have to
+  work it out.
+- A heading is followed immediately by its content. Two blank lines precede a
+  `##` and one precedes a `###`, which groups a day and its dossiers into one
+  block while keeping consecutive days apart. That holds for the first day too,
+  whether the title is alone above it or a scope line stands between.
 - **Days ascending**, oldest first.
-- Under a day: the day's **entry content first**, then one `### <dossier>`
-  block per dossier that has a worklog line on that day.
+- Under a day: the day's **entry content first** (its own sections, see below),
+  then one `### <dossier>` block per dossier that has a worklog line on that
+  day.
 - **Dossier order is the order of appearance in that day's entry**
   (`## Worked on Dossiers`, top to bottom). A dossier that has a worklog line
   for the day but is not linked from the entry follows the linked ones, name
@@ -245,13 +271,12 @@ Shape rules:
   name ascending throughout. This reproduces a chronological-ish order without
   inventing a second authority.
 - A day with no worklog lines and no entry file is not in the report at all. A
-  day whose entry renders no bullets prints its heading and then
-  `(No work found)`. The note is entry-only: a day that is in the report for
-  its dossier worklogs alone never carries it.
-- `## Complete git diff` is last, so `--no-diff` leaves a complete,
-  self-contained daily document. Its blocks follow **first appearance in the
-  period** (the order the dossiers first show up among the days), ties broken
-  by name.
+  day whose entry renders nothing prints its heading and then `(No work found)`.
+  The note is entry-only: a day that is in the report for its dossier worklogs
+  alone never carries it.
+- `## Git diff` is last, so `--no-diff` leaves a complete, self-contained daily
+  document. Its blocks follow **first appearance in the period** (the order the
+  dossiers first show up among the days), ties broken by name.
 - Every dossier in scope gets a block there. A dossier git reports no changes
   for prints its heading and `(No git changes were found)`; one whose diff
   could not be read prints `(Git changes could not be read)` instead. The
@@ -260,19 +285,29 @@ Shape rules:
 
 ### Entry content
 
-For each day the entry contributes its **bullets** (its tasks and notes),
-indentation normalised to two spaces per level the same way `bureau tasks`
-normalises it, markers preserved. The entry's `# <date>` title and its
-`## Worked on Dossiers` section are not reprinted (the latter is the index the
-ordering comes from, and the `###` blocks already carry the dossiers).
+An entry contributes its **headings and bullets**, and its own sections become
+the day's sections one `#` deeper: `## Notes` prints as `### Notes`, `### Sub`
+as `#### Sub`, and so on. The section a bullet sits under is therefore visible
+in the report, which is what tells a note from a task reference.
 
-v1 includes **bullets only**: non-bullet prose inside an entry is out of
-scope. The dossier template and every entry seen so far are bullet lists, so
-this loses nothing yet; if prose turns out to matter, extend the extractor
-rather than the tree renderer.
+- Indentation is normalised to two spaces per level the same way `bureau tasks`
+  normalises it, and markers are preserved as written.
+- The entry's `# <date>` title is dropped: the day heading already says it.
+- `## Worked on Dossiers` is dropped: it is the index the ordering comes from,
+  and the `###` blocks carry the dossiers themselves.
+- A heading prints only when work sits under it, directly or in a subsection of
+  its own. A section left empty is dropped rather than printed as an empty
+  heading, which is what keeps a template entry with nothing in it down to the
+  `(No work found)` note.
+
+Non-bullet prose inside an entry is still out of scope: only headings and
+bullets survive. The dossier template and every entry seen so far are bullet
+lists, so this loses nothing yet; if prose turns out to matter, extend the
+extractor rather than the tree renderer.
 
 With `--filter`, the report is dossier-centric: only the chosen dossier's
-`###` blocks appear, and the day's entry content is left out.
+`###` blocks appear, the day's entry content is left out, and the scope line
+names the dossier the report is about.
 
 ## The git diff
 
@@ -401,7 +436,7 @@ printed. To keep that true:
   asked for with `--from`/`--to`.
 - **A period with some work in it:** its workless entry days are printed with
   `(No work found)`, not dropped and not an error.
-- **`--no-diff`:** the `## Complete git diff` heading is not printed at all
+- **`--no-diff`:** the `## Git diff` heading is not printed at all
   (not an empty heading).
 
 ## Colour
@@ -420,7 +455,7 @@ written -- marker, prose and all.
 | Line | Drawn in |
 |---|---|
 | `# Report …` title | bold magenta |
-| `## <date>`, `## Complete git diff` | bold cyan |
+| `## <date>`, `## Git diff` | bold cyan |
 | `### <dossier>`, in either half | bold blue |
 | `{{{ git diff`, `}}}`, and the backtick fence | dim |
 | every bullet, `(No work found)`, `(No git changes were found)`, `(Git changes could not be read)` | plain |
@@ -481,6 +516,13 @@ Pure (`src/report.rs`, `src/date.rs`):
   included, `--no-diff`, the fold markers, the computed fence (a diff holding a
   fence line of its own keeps it inside the block), the first-appearance order
   of the diff blocks, and CRLF.
+- The entry extractor: its sections demoted one level, a nested section keeping
+  its parent, an empty section dropped, the `# <date>` title and the
+  `## Worked on Dossiers` index dropped, and no `\r` reaching the output.
+- The day heading's weekday, two blank lines before every `##` (the first day
+  and a filtered report's day included), the scope line's presence
+  when filtered and absence when not, and a dossier named by its own title
+  with the file stem as the fallback.
 - Colour: a terminal run hues the title, the `##` headings, the dossier
   headings and the scaffolding around each diff, and leaves every bullet, note
   and diff body alone; `Palette::OFF` (a pipe, `NO_COLOR`, `TERM=dumb`) prints

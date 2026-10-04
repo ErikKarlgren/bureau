@@ -48,13 +48,9 @@
       this is not a priority.
 
 - [ ] `bureau report` diff size: a dossier created in the period diffs as its
-      whole file, so `## Complete git diff` can dwarf the daily work that is the
+      whole file, so `## Git diff` can dwarf the daily work that is the
       report's point. Consider a per-dossier `--numstat` line and a
       `--diff=full|stat|none` switch, or `--no-diff` plus `--stat`.
-- [ ] `bureau report`: an entry's `## Notes` and `## Worked on Tasks` headings
-      are flattened into one bullet list under the day, so the reader cannot
-      tell notes from task references. Mirror the entry's own headings as `###`
-      blocks when that context turns out to matter.
 - [ ] `bureau report --brief`: one line per day, for a standup or a CV, with the
       full report left as the appendix. Also `--group dossier`, a dossier-major
       view that matches the diff half's order.
