@@ -602,8 +602,9 @@ NO_COLOR=1 cargo run -- tasks       # plain, in a terminal
   purpose: entries have tasks too, and the same rule has to work in both.
 - Sealing dossiers (`TASKS.md`).
 - Styling the rest of the CLI. `bureau tasks` has its own palette (see
-  [Colour](#colour)); the other commands print plain text, and a shared
-  convention is a separate decision.
+  [Colour](#colour)); `bureau report` reuses it for its headings and `bureau
+  new` paints the path it reports in cyan, but a shared convention across every
+  command is a separate decision.
 - Forcing colour through a pipe: `bureau tasks | less -R` gets plain text,
   because there is no `--color` flag and no `CLICOLOR_FORCE` yet.
 - Windows consoles that do not understand `ANSI` escapes. Colour is written

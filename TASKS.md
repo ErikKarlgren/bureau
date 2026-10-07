@@ -33,7 +33,6 @@
       dossiers; low value while notes are small, so it was left alone.
 - [ ] Shell completion for bash and fish
 - [ ] Fix commit behavior. Whenever any `bureau` command is run, all files dependant on `bureau` (for now only entries/ and dossiers/) need to be committed. Need to discuss whether to create 1 commit per file, 1 commit per type of file (e.g. 1 commit for all daily entries, another for all dossiers). The problem to fix is that, after manually editing some files already created with `bureau new`, the changes aren't committed automatically, and then the user needs to do so manually, which is undesired.
-- [ ] `bureau new (dossier|entry)`: print the name of the created file
 - [ ] Maybe fix later: `bureau tasks` treats a task inside a fenced (or indented)
       code block as real work. `Tree::parse` only looks for a leading `-`, so an
       example checklist pasted into a dossier shows up in the listing. No
@@ -96,3 +95,8 @@
       context lines would gain a colour the palette does not otherwise have.
 
 ## Current features
+- [x] `bureau new (dossier|entry)`: print the name of the created file, as
+      `Created '<path>'` with the path in cyan, relative to the current working
+      directory. It is the only thing these commands print, so there is nothing
+      else for the path to be confused with, and colour is off in a pipe exactly
+      as it is everywhere else.

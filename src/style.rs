@@ -1,9 +1,11 @@
-//! Colour for `bureau tasks`.
+//! Colour for `bureau tasks`, `bureau report` and the paths `bureau new`
+//! prints.
 //!
-//! The rules are in `docs/subcommands/tasks.md`; the whole of the
-//! implementation is the table in [`Palette::ON`]. Colour is a redundant
-//! encoding on purpose: every hue repeats something the line already says, so a
-//! run with colour off loses nothing but the aid to scanning.
+//! The rules for a listing and a report are in `docs/subcommands/tasks.md` and
+//! `docs/subcommands/report.md`; the whole of the implementation is the table
+//! in [`Palette::ON`]. Colour is a redundant encoding on purpose: every hue
+//! repeats something the line already says, so a run with colour off loses
+//! nothing but the aid to scanning.
 
 use std::env;
 use std::io::IsTerminal;
@@ -71,6 +73,8 @@ pub struct Palette {
     done: Style,
     /// A source heading, entry or dossier.
     heading_style: Style,
+    /// The path `bureau new` reports it has written.
+    path_style: Style,
     /// Everything else printed: the lines that only lead to a task.
     context_style: Style,
     /// A warning, which goes to stderr rather than into the report.
@@ -95,6 +99,7 @@ impl Palette {
         waiting: Style::NONE,
         done: Style::NONE,
         heading_style: Style::NONE,
+        path_style: Style::NONE,
         context_style: Style::NONE,
         warning_style: Style::NONE,
         title_style: Style::NONE,
@@ -107,6 +112,7 @@ impl Palette {
     /// for what is waiting on somebody else, green for what is over. The report
     /// draws structure instead of state: a bold magenta title, bold cyan `##`
     /// headings, bold blue dossier headings, and dim scaffolding around a diff.
+    /// `bureau new` draws a plain sentence whose path is cyan.
     pub const ON: Self = Self {
         actionable: BOLD_BLUE,
         blocked: BOLD_MAGENTA,
@@ -116,6 +122,7 @@ impl Palette {
         waiting: MAGENTA,
         done: GREEN,
         heading_style: BOLD,
+        path_style: CYAN,
         context_style: DIM,
         warning_style: BOLD_YELLOW,
         title_style: BOLD_MAGENTA,
@@ -168,6 +175,15 @@ impl Palette {
     #[must_use]
     pub const fn heading(self) -> Style {
         self.heading_style
+    }
+
+    /// The style a path is drawn in, in the one line `bureau new` prints.
+    ///
+    /// The path carries no state and no structure; the hue is there to pick the
+    /// one thing a person may want to copy out of the line.
+    #[must_use]
+    pub const fn path(self) -> Style {
+        self.path_style
     }
 
     /// The style the report's title is drawn in.
@@ -329,6 +345,7 @@ mod tests {
             palette.section(Section::Blocked),
             palette.section(Section::Finished),
             palette.heading(),
+            palette.path(),
             palette.context(),
             palette.title(),
             palette.subheading(),
@@ -371,6 +388,10 @@ mod tests {
         assert_eq!(
             palette.heading().paint("# 1 - a dossier"),
             "# 1 - a dossier"
+        );
+        assert_eq!(
+            palette.path().paint("entries/2026-09-20.md"),
+            "entries/2026-09-20.md"
         );
         assert_eq!(palette.context().paint("- [x] context"), "- [x] context");
         assert_eq!(
@@ -421,5 +442,15 @@ mod tests {
             "\x1b[1;33mwarning: x\x1b[0m"
         );
         assert_eq!(Palette::OFF.warning().paint("warning: x"), "warning: x");
+    }
+
+    #[test]
+    fn a_created_path_is_cyan_and_nothing_else_in_the_line_is() {
+        // The sentence around the path stays plain: the path is the one thing
+        // in it a person may want to pick out.
+        assert_eq!(
+            Palette::ON.path().paint("entries/2026-09-20.md"),
+            "\x1b[36mentries/2026-09-20.md\x1b[0m"
+        );
     }
 }
