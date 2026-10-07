@@ -10,7 +10,6 @@ use chrono::Local;
 use crate::Result;
 use crate::cli::DossierArgs;
 use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
-use crate::commands::sources;
 use crate::dossier;
 use crate::git;
 use crate::style::{self, Palette};
@@ -23,8 +22,11 @@ use crate::template;
 /// Fails when the current directory is not in a git repository, when a dossier
 /// with the same name already exists, or when the dossier cannot be written.
 pub fn dossier(args: &DossierArgs) -> Result<()> {
+    let base = std::env::current_dir().ok();
+
     run_in(
         &git::toplevel()?,
+        base.as_deref(),
         args,
         style::for_stdout(),
         io::stdin().lock(),
@@ -42,31 +44,41 @@ pub fn entry() -> Result<()> {
     let date = Local::now().format("%Y-%m-%d").to_string();
     let path = root.join(ENTRIES_DIR).join(format!("{date}.md"));
 
+    let base = std::env::current_dir().ok();
+    let shown = shown_from(&path, base.as_deref());
+
     if path.exists() {
-        bail!("an entry already exists at path '{}'", path.display());
+        bail!("an entry already exists at '{shown}'");
     }
 
-    let base = std::env::current_dir().ok();
-    println!("{}", created(&path, base.as_deref(), style::for_stdout()));
+    println!("{}", created(&shown, style::for_stdout()));
     write_and_commit(
         &path,
+        &shown,
         &template::daily_entry(&date),
         "entry",
         &format!("New entry {date}"),
     )
 }
 
-/// The rest of [`dossier`], with the repository root, the colours and the
-/// answers to its two prompts handed in, so a test can drive it without a git
-/// checkout, a terminal or an environment.
-fn run_in(root: &Path, args: &DossierArgs, palette: Palette, answers: impl BufRead) -> Result<()> {
+/// The rest of [`dossier`], with the repository root, the directory the names
+/// are read from, the colours and the answers to its two prompts handed in, so
+/// a test can drive it without a git checkout, a terminal or an environment.
+fn run_in(
+    root: &Path,
+    base: Option<&Path>,
+    args: &DossierArgs,
+    palette: Palette,
+    answers: impl BufRead,
+) -> Result<()> {
     let name = args.name.join(" ");
     let path = root
         .join(DOSSIERS_DIR)
         .join(dossier::name_to_filename(&name));
+    let shown = shown_from(&path, base);
 
     if path.exists() {
-        bail!("a dossier already exists at path '{}'", path.display());
+        bail!("a dossier already exists at '{shown}'");
     }
 
     let creation_date = now();
@@ -82,9 +94,14 @@ fn run_in(root: &Path, args: &DossierArgs, palette: Palette, answers: impl BufRe
         ],
     );
 
-    let base = std::env::current_dir().ok();
-    println!("{}", created(&path, base.as_deref(), palette));
-    write_and_commit(&path, &contents, "dossier", &format!("New dossier {name}"))
+    println!("{}", created(&shown, palette));
+    write_and_commit(
+        &path,
+        &shown,
+        &contents,
+        "dossier",
+        &format!("New dossier {name}"),
+    )
 }
 
 /// The current date and time, as `bureau new dossier` writes it into the
@@ -142,42 +159,46 @@ fn read_link(answers: &mut impl BufRead) -> Result<String> {
 /// Write a new file, creating its directory, then commit it.
 ///
 /// A git failure is only a warning: the file on disk is useful either way.
-/// Everything this prints is relative to the repository root rather than the
-/// machine's idea of where the notes live.
-fn write_and_commit(path: &Path, contents: &str, kind: &str, message: &str) -> Result<()> {
-    let shown = sources::relative(path, &git::toplevel()?);
-
+/// `shown` is the name of the file relative to the working directory, which is
+/// what every message says it by.
+fn write_and_commit(
+    path: &Path,
+    shown: &str,
+    contents: &str,
+    kind: &str,
+    message: &str,
+) -> Result<()> {
     if let Some(directory) = path.parent() {
         fs::create_dir_all(directory)
             .with_context(|| format!("could not create '{}'", directory.display()))?;
     }
 
-    fs::write(path, contents).with_context(|| format!("could not write '{}'", shown.display()))?;
+    fs::write(path, contents).with_context(|| format!("could not write '{shown}'"))?;
 
     if let Err(error) = git::commit(&[path], message) {
         eprintln!("warning: {error:?}");
-        eprintln!(
-            "warning: the {kind} was created at '{}' but is not committed",
-            shown.display()
-        );
+        eprintln!("warning: the {kind} was created at '{shown}' but is not committed");
     }
 
     Ok(())
 }
 
-/// What to print once `path` is on disk: the one line a person wants after
-/// asking for a file, with the path painted.
-///
-/// The path is shown relative to `base`, the current working directory, so the
-/// line names the file from where the user is standing rather than repeating
-/// the machine's idea of where the notes live. When there is no working
-/// directory to measure against, it falls back to the path itself, which is at
-/// least true.
-fn created(path: &Path, base: Option<&Path>, palette: Palette) -> String {
-    let fallback = || path.to_string_lossy().into_owned();
-    let shown = relative_to(path, base).unwrap_or_else(fallback);
+/// What to print once the file is on disk: the one line a person wants after
+/// asking for a file, with its name painted.
+fn created(shown: &str, palette: Palette) -> String {
+    format!("Created '{}'", palette.path().paint(shown))
+}
 
-    format!("Created '{}'", palette.path().paint(&shown))
+/// The name to print for `path`: how to walk to it from `base`, the current
+/// working directory, so the line reads from where the user is standing rather
+/// than repeating the machine's idea of where the notes live.
+///
+/// When there is no working directory to measure against, or one that is not
+/// absolute, it falls back to the path itself, which is at least true. A name
+/// is never invented: `../notes/a.md` for a file that is not there would be
+/// worse than a long one that is right.
+fn shown_from(path: &Path, base: Option<&Path>) -> String {
+    relative_to(path, base).unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 /// A path as it reads from `base`, with `/` for every separator so the same
@@ -227,9 +248,16 @@ fn names(path: &Path) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::path::PathBuf;
 
     use super::*;
     use crate::commands::tests::Scratch;
+
+    /// The directory the names in a test are read from: the scratch root, so a
+    /// test sees the same `dossiers/x.md` a user at the root would.
+    fn base(scratch: &Scratch) -> PathBuf {
+        scratch.path().to_path_buf()
+    }
 
     /// Arguments for a dossier named `name`.
     fn args(name: &str) -> DossierArgs {
@@ -243,46 +271,44 @@ mod tests {
         let root = Path::new("/home/user/notes");
         let entry = root.join("entries/2026-09-20.md");
 
-        assert_eq!(
-            created(&entry, Some(root), Palette::OFF),
-            "Created 'entries/2026-09-20.md'"
-        );
+        assert_eq!(shown_from(&entry, Some(root)), "entries/2026-09-20.md");
 
         // From below the file, the line is just its name.
         assert_eq!(
-            created(&entry, Some(&root.join("entries")), Palette::OFF),
-            "Created '2026-09-20.md'"
+            shown_from(&entry, Some(&root.join("entries"))),
+            "2026-09-20.md"
         );
 
         // From a sibling, which is where `bureau new` is run from more often
         // than not, the line says how far back up the file is.
         assert_eq!(
-            created(&entry, Some(&root.join("dossiers")), Palette::OFF),
-            "Created '../entries/2026-09-20.md'"
+            shown_from(&entry, Some(&root.join("dossiers"))),
+            "../entries/2026-09-20.md"
         );
         assert_eq!(
-            created(&entry, Some(&root.join("dossiers/2026/09")), Palette::OFF),
-            "Created '../../../entries/2026-09-20.md'"
+            shown_from(&entry, Some(&root.join("dossiers/2026/09"))),
+            "../../../entries/2026-09-20.md"
         );
 
         // A working directory outside the file's own tree still names it the
         // long way round rather than guessing.
         assert_eq!(
-            created(&entry, Some(Path::new("/home/user/other")), Palette::OFF),
-            "Created '../notes/entries/2026-09-20.md'"
+            shown_from(&entry, Some(Path::new("/home/user/other"))),
+            "../notes/entries/2026-09-20.md"
         );
     }
 
     #[test]
     fn only_the_path_of_a_created_file_takes_a_hue() {
-        let root = Path::new("/home/user/notes");
-        let font = root.join("dossiers/1234 - fewafw.md");
-
         // The sentence around it is not painted: only the path was asked for,
         // so a copy of the line pastes the path and not a screenful of escapes.
         assert_eq!(
-            created(&font, Some(root), Palette::ON),
+            created("dossiers/1234 - fewafw.md", Palette::ON),
             "Created '\x1b[36mdossiers/1234 - fewafw.md\x1b[0m'"
+        );
+        assert_eq!(
+            created("dossiers/1234 - fewafw.md", Palette::OFF),
+            "Created 'dossiers/1234 - fewafw.md'"
         );
     }
 
@@ -295,8 +321,8 @@ mod tests {
         assert_eq!(relative_to(entry, None), None);
         assert_eq!(relative_to(entry, Some(Path::new("notes"))), None);
         assert_eq!(
-            created(entry, None, Palette::OFF),
-            "Created '/home/user/notes/entries/2026-09-20.md'"
+            shown_from(entry, None),
+            "/home/user/notes/entries/2026-09-20.md"
         );
     }
 
@@ -325,8 +351,10 @@ mod tests {
         let scratch = Scratch::new("new-dossier").unwrap();
         let answers = Cursor::new("A dossier about the font.\n.\nThe link.\n");
 
+        let base = base(&scratch);
         run_in(
             scratch.path(),
+            Some(&base),
             &args("1234 - fewafw"),
             Palette::OFF,
             answers,
@@ -343,7 +371,15 @@ mod tests {
         let scratch = Scratch::new("new-dossier-no-link").unwrap();
         let answers = Cursor::new("Nothing to link to.\n.\n");
 
-        run_in(scratch.path(), &args("5678 - quiet"), Palette::OFF, answers).unwrap();
+        let base = base(&scratch);
+        run_in(
+            scratch.path(),
+            Some(&base),
+            &args("5678 - quiet"),
+            Palette::OFF,
+            answers,
+        )
+        .unwrap();
 
         let written = scratch.read("dossiers/5678 - quiet.md").unwrap();
         assert!(written.contains("Nothing to link to."), "{written:?}");
@@ -355,15 +391,24 @@ mod tests {
         let scratch = Scratch::new("new-dossier-twice").unwrap();
         scratch.write("dossiers/1 - here.md", "# Mine\n").unwrap();
 
+        let base = base(&scratch);
         let error = run_in(
             scratch.path(),
+            Some(&base),
             &args("1 - here"),
             Palette::OFF,
             Cursor::new("...\n"),
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("already exists"), "{error}");
+        // The refusal names the file the way the message would have: the same
+        // name relative to where the user is standing.
+        assert!(
+            error
+                .to_string()
+                .contains("already exists at 'dossiers/1 - here.md'"),
+            "{error}"
+        );
         assert_eq!(scratch.read("dossiers/1 - here.md").unwrap(), "# Mine\n");
     }
 }

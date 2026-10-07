@@ -93,10 +93,3 @@
       already colour it. Weigh it against the rule that the report never
       repaints a diff: white is a hue nothing else in the report uses, so the
       context lines would gain a colour the palette does not otherwise have.
-
-## Current features
-- [x] `bureau new (dossier|entry)`: print the name of the created file, as
-      `Created '<path>'` with the path in cyan, relative to the current working
-      directory. It is the only thing these commands print, so there is nothing
-      else for the path to be confused with, and colour is off in a pipe exactly
-      as it is everywhere else.
