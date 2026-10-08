@@ -340,6 +340,35 @@ impl Tree {
         lines
     }
 
+    /// The lines a whole file prints: every bullet, at two spaces per level.
+    ///
+    /// Nothing is filtered, no section is consulted and nothing is painted,
+    /// which is what `bureau report` needs to print a day's notes as they were
+    /// written: the report's colour marks its structure, not task state.
+    #[must_use]
+    pub fn render_all(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+
+        for root in &self.roots {
+            self.render_all_node(*root, 0, &mut lines);
+        }
+
+        lines
+    }
+
+    /// Print one node and everything under it, in document order.
+    fn render_all_node(&self, node: usize, depth: usize, lines: &mut Vec<String>) {
+        let Some(current) = self.nodes.get(node) else {
+            return;
+        };
+
+        lines.push(indent(&plain_bullet(current), depth));
+
+        for child in &current.children {
+            self.render_all_node(*child, depth.saturating_add(1), lines);
+        }
+    }
+
     /// Print one node and whatever below it belongs to `section`.
     ///
     /// A node prints when it belongs to the section, or when it is on the way
@@ -1061,7 +1090,7 @@ mod tests {
         // wait, so only that line takes the hue.
         let content = "- [?] Waiting\n  - [ ] Held up\n";
         let expected = lines(&[
-            "- \x1b[33m[?]\x1b[0m Waiting",
+            "- \x1b[35m[?]\x1b[0m Waiting",
             "  \x1b[2m- [ ] Held up\x1b[0m",
         ]);
 
@@ -1088,5 +1117,27 @@ mod tests {
         assert_eq!(tree.marker(0), Some(State::Todo));
         assert_eq!(tree.marker(1), Some(State::Done));
         assert_eq!(tree.marker(2), None);
+    }
+
+    #[test]
+    fn render_all_prints_every_bullet_in_document_order_and_plain() {
+        let content = "- prose\n  - [ ] todo\n- [x] done\n    - [o] almost\n";
+        let expected = lines(&["- prose", "  - [ ] todo", "- [x] done", "  - [o] almost"]);
+
+        assert_eq!(Tree::parse(content).render_all(), expected);
+    }
+
+    #[test]
+    fn render_all_leaves_every_marker_unpainted() {
+        let content = "- [ ] todo\n- [.] doing\n- [o] almost\n- [?] waiting\n- [x] done\n";
+        let expected = lines(&[
+            "- [ ] todo",
+            "- [.] doing",
+            "- [o] almost",
+            "- [?] waiting",
+            "- [x] done",
+        ]);
+
+        assert_eq!(Tree::parse(content).render_all(), expected);
     }
 }

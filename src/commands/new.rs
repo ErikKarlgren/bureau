@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::io::{self, BufRead, Write};
-use std::path::Path;
+use std::path::{Component, Path};
 
 use anyhow::{Context, bail};
 use chrono::Local;
@@ -12,6 +12,7 @@ use crate::cli::DossierArgs;
 use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
 use crate::dossier;
 use crate::git;
+use crate::style::{self, Palette};
 use crate::template;
 
 /// Create a dossier named after the arguments, then commit it.
@@ -21,17 +22,67 @@ use crate::template;
 /// Fails when the current directory is not in a git repository, when a dossier
 /// with the same name already exists, or when the dossier cannot be written.
 pub fn dossier(args: &DossierArgs) -> Result<()> {
-    let name = args.name.join(" ");
-    let dossiers_dir = git::toplevel()?.join(DOSSIERS_DIR);
-    let path = dossiers_dir.join(dossier::name_to_filename(&name));
+    let base = std::env::current_dir().ok();
+
+    run_in(
+        &git::toplevel()?,
+        base.as_deref(),
+        args,
+        style::for_stdout(),
+        io::stdin().lock(),
+    )
+}
+
+/// Create today's daily entry, then commit it.
+///
+/// # Errors
+///
+/// Fails when the current directory is not in a git repository, when today's
+/// entry already exists, or when the entry cannot be written.
+pub fn entry() -> Result<()> {
+    let root = git::toplevel()?;
+    let date = Local::now().format("%Y-%m-%d").to_string();
+    let path = root.join(ENTRIES_DIR).join(format!("{date}.md"));
+
+    let base = std::env::current_dir().ok();
+    let shown = shown_from(&path, base.as_deref());
 
     if path.exists() {
-        bail!("a dossier already exists at path '{}'", path.display());
+        bail!("an entry already exists at '{shown}'");
     }
 
-    let creation_date = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let description = prompt_for_description()?;
-    let link = prompt_for_link()?;
+    println!("{}", created(&shown, style::for_stdout()));
+    write_and_commit(
+        &path,
+        &shown,
+        &template::daily_entry(&date),
+        "entry",
+        &format!("New entry {date}"),
+    )
+}
+
+/// The rest of [`dossier`], with the repository root, the directory the names
+/// are read from, the colours and the answers to its two prompts handed in, so
+/// a test can drive it without a git checkout, a terminal or an environment.
+fn run_in(
+    root: &Path,
+    base: Option<&Path>,
+    args: &DossierArgs,
+    palette: Palette,
+    answers: impl BufRead,
+) -> Result<()> {
+    let name = args.name.join(" ");
+    let path = root
+        .join(DOSSIERS_DIR)
+        .join(dossier::name_to_filename(&name));
+    let shown = shown_from(&path, base);
+
+    if path.exists() {
+        bail!("a dossier already exists at '{shown}'");
+    }
+
+    let creation_date = now();
+    let (description, link) = read_answers(answers)?;
 
     let contents = template::render(
         template::DOSSIER,
@@ -43,57 +94,39 @@ pub fn dossier(args: &DossierArgs) -> Result<()> {
         ],
     );
 
-    write_and_commit(&path, &contents, "dossier", &format!("New dossier {name}"))
+    println!("{}", created(&shown, palette));
+    write_and_commit(
+        &path,
+        &shown,
+        &contents,
+        "dossier",
+        &format!("New dossier {name}"),
+    )
 }
 
-/// Create today's daily entry, then commit it.
-///
-/// # Errors
-///
-/// Fails when the current directory is not in a git repository, when today's
-/// entry already exists, or when the entry cannot be written.
-pub fn entry() -> Result<()> {
-    let date = Local::now().format("%Y-%m-%d").to_string();
-    let entries_dir = git::toplevel()?.join(ENTRIES_DIR);
-    let path = entries_dir.join(format!("{date}.md"));
+/// The current date and time, as `bureau new dossier` writes it into the
+/// template and into the file's name.
+fn now() -> String {
+    let now = Local::now();
 
-    if path.exists() {
-        bail!("an entry already exists at path '{}'", path.display());
-    }
-
-    let contents = template::daily_entry(&date);
-
-    write_and_commit(&path, &contents, "entry", &format!("New entry {date}"))
+    format!("{} {}", now.format("%Y-%m-%d"), now.format("%H:%M:%S"))
 }
 
-/// Write a new file, creating its directory, then commit it.
-///
-/// A git failure is only a warning: the file on disk is useful either way.
-fn write_and_commit(path: &Path, contents: &str, kind: &str, message: &str) -> Result<()> {
-    if let Some(directory) = path.parent() {
-        fs::create_dir_all(directory)
-            .with_context(|| format!("could not create '{}'", directory.display()))?;
-    }
+/// Read the description and the optional link, in the order the prompts ask for
+/// them.
+fn read_answers(mut answers: impl BufRead) -> Result<(String, String)> {
+    let description = read_description(&mut answers)?;
+    let link = read_link(&mut answers)?;
 
-    fs::write(path, contents).with_context(|| format!("could not write '{}'", path.display()))?;
-
-    if let Err(error) = git::commit(&[path], message) {
-        eprintln!("warning: {error:?}");
-        eprintln!(
-            "warning: the {kind} was created at '{}' but is not committed",
-            path.display()
-        );
-    }
-
-    Ok(())
+    Ok((description, link))
 }
 
-/// Read the description from stdin, ending at a line containing only a dot.
-fn prompt_for_description() -> Result<String> {
+/// Read the description, ending at a line containing only a dot.
+fn read_description(answers: &mut impl BufRead) -> Result<String> {
     println!("Enter dossier's description. When done, write a line containing only '.'");
 
     let mut lines = Vec::new();
-    for line in io::stdin().lock().lines() {
+    for line in answers.lines() {
         let line = line?;
         if line == "." {
             break;
@@ -105,13 +138,13 @@ fn prompt_for_description() -> Result<String> {
 }
 
 /// Read the optional link to the task this dossier is about.
-fn prompt_for_link() -> Result<String> {
+fn read_link(answers: &mut impl BufRead) -> Result<String> {
     print!("Link to issue (e.g. Jira). If none, press Enter: ");
     io::stdout().flush()?;
 
     let mut link = String::new();
-    if io::stdin().read_line(&mut link)? == 0 {
-        // stdin ended, which means no link.
+    if answers.read_line(&mut link)? == 0 {
+        // The answers ended, which means no link.
         return Ok(String::new());
     }
 
@@ -121,4 +154,261 @@ fn prompt_for_link() -> Result<String> {
     }
 
     Ok(format!("- [Link to task]({link})\n"))
+}
+
+/// Write a new file, creating its directory, then commit it.
+///
+/// A git failure is only a warning: the file on disk is useful either way.
+/// `shown` is the name of the file relative to the working directory, which is
+/// what every message says it by.
+fn write_and_commit(
+    path: &Path,
+    shown: &str,
+    contents: &str,
+    kind: &str,
+    message: &str,
+) -> Result<()> {
+    if let Some(directory) = path.parent() {
+        fs::create_dir_all(directory)
+            .with_context(|| format!("could not create '{}'", directory.display()))?;
+    }
+
+    fs::write(path, contents).with_context(|| format!("could not write '{shown}'"))?;
+
+    if let Err(error) = git::commit(&[path], message) {
+        eprintln!("warning: {error:?}");
+        eprintln!("warning: the {kind} was created at '{shown}' but is not committed");
+    }
+
+    Ok(())
+}
+
+/// What to print once the file is on disk: the one line a person wants after
+/// asking for a file, with its name painted.
+fn created(shown: &str, palette: Palette) -> String {
+    format!("Created '{}'", palette.path().paint(shown))
+}
+
+/// The name to print for `path`: how to walk to it from `base`, the current
+/// working directory, so the line reads from where the user is standing rather
+/// than repeating the machine's idea of where the notes live.
+///
+/// When there is no working directory to measure against, or one that is not
+/// absolute, it falls back to the path itself, which is at least true. A name
+/// is never invented: `../notes/a.md` for a file that is not there would be
+/// worse than a long one that is right.
+fn shown_from(path: &Path, base: Option<&Path>) -> String {
+    relative_to(path, base).unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
+/// A path as it reads from `base`, with `/` for every separator so the same
+/// line comes out on either platform. `../entries/2026-09-20.md` is what it
+/// means: the way to walk to `path` from `base`.
+///
+/// `None` when either path is relative, because then there is no common ground
+/// to walk from, and the caller's cue to name the file some other way. A path
+/// made up without one would name a file that is not there.
+fn relative_to(path: &Path, base: Option<&Path>) -> Option<String> {
+    let path = names(path)?;
+    let base = names(base?)?;
+
+    let common = path
+        .iter()
+        .zip(base.iter())
+        .take_while(|(here, there)| here == there)
+        .count();
+
+    let mut steps: Vec<String> = vec!["..".to_owned(); base.len().saturating_sub(common)];
+    steps.extend(path.iter().skip(common).cloned());
+
+    Some(steps.join("/"))
+}
+
+/// The names in an absolute path, root first, or `None` when it is relative.
+///
+/// `..` in a path is out of place in what bureau prints, so it stays as written
+/// rather than being resolved: a working directory that git cannot name
+/// absolutely is not one this command can describe.
+fn names(path: &Path) -> Option<Vec<String>> {
+    if !path.is_absolute() {
+        return None;
+    }
+
+    Some(
+        path.components()
+            .filter_map(|component| match component {
+                Component::Normal(text) => Some(text.to_string_lossy().into_owned()),
+                Component::ParentDir => Some("..".to_owned()),
+                Component::CurDir | Component::RootDir | Component::Prefix(_) => None,
+            })
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::commands::tests::Scratch;
+
+    /// The directory the names in a test are read from: the scratch root, so a
+    /// test sees the same `dossiers/x.md` a user at the root would.
+    fn base(scratch: &Scratch) -> PathBuf {
+        scratch.path().to_path_buf()
+    }
+
+    /// Arguments for a dossier named `name`.
+    fn args(name: &str) -> DossierArgs {
+        DossierArgs {
+            name: vec![name.to_owned()],
+        }
+    }
+
+    #[test]
+    fn a_created_path_reads_from_where_the_user_stands() {
+        let root = Path::new("/home/user/notes");
+        let entry = root.join("entries/2026-09-20.md");
+
+        assert_eq!(shown_from(&entry, Some(root)), "entries/2026-09-20.md");
+
+        // From below the file, the line is just its name.
+        assert_eq!(
+            shown_from(&entry, Some(&root.join("entries"))),
+            "2026-09-20.md"
+        );
+
+        // From a sibling, which is where `bureau new` is run from more often
+        // than not, the line says how far back up the file is.
+        assert_eq!(
+            shown_from(&entry, Some(&root.join("dossiers"))),
+            "../entries/2026-09-20.md"
+        );
+        assert_eq!(
+            shown_from(&entry, Some(&root.join("dossiers/2026/09"))),
+            "../../../entries/2026-09-20.md"
+        );
+
+        // A working directory outside the file's own tree still names it the
+        // long way round rather than guessing.
+        assert_eq!(
+            shown_from(&entry, Some(Path::new("/home/user/other"))),
+            "../notes/entries/2026-09-20.md"
+        );
+    }
+
+    #[test]
+    fn only_the_path_of_a_created_file_takes_a_hue() {
+        // The sentence around it is not painted: only the path was asked for,
+        // so a copy of the line pastes the path and not a screenful of escapes.
+        assert_eq!(
+            created("dossiers/1234 - fewafw.md", Palette::ON),
+            "Created '\x1b[36mdossiers/1234 - fewafw.md\x1b[0m'"
+        );
+        assert_eq!(
+            created("dossiers/1234 - fewafw.md", Palette::OFF),
+            "Created 'dossiers/1234 - fewafw.md'"
+        );
+    }
+
+    #[test]
+    fn a_path_the_working_directory_cannot_be_measured_against_keeps_its_own() {
+        // No working directory at all, or one that is not absolute: there is no
+        // common ground to walk from, so the line falls back to what it has.
+        let entry = Path::new("/home/user/notes/entries/2026-09-20.md");
+
+        assert_eq!(relative_to(entry, None), None);
+        assert_eq!(relative_to(entry, Some(Path::new("notes"))), None);
+        assert_eq!(
+            shown_from(entry, None),
+            "/home/user/notes/entries/2026-09-20.md"
+        );
+    }
+
+    #[test]
+    fn a_path_uses_forward_slashes_whatever_the_platform_says() {
+        // `bureau new` names a file the same way on Windows, so the line a
+        // person copies out of it means the same thing in git and in a link.
+        // Walking up is a `..` step with the same separator as any other.
+        let root = Path::new("/home/user/notes");
+
+        assert_eq!(
+            relative_to(&root.join("entries/2026-09-20.md"), Some(root)),
+            Some("entries/2026-09-20.md".to_owned())
+        );
+        assert_eq!(
+            relative_to(
+                &root.join("entries/2026-09-20.md"),
+                Some(&root.join("dossiers"))
+            ),
+            Some("../entries/2026-09-20.md".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_new_dossier_is_named_after_its_arguments() {
+        let scratch = Scratch::new("new-dossier").unwrap();
+        let answers = Cursor::new("A dossier about the font.\n.\nThe link.\n");
+
+        let base = base(&scratch);
+        run_in(
+            scratch.path(),
+            Some(&base),
+            &args("1234 - fewafw"),
+            Palette::OFF,
+            answers,
+        )
+        .unwrap();
+
+        let written = scratch.read("dossiers/1234 - fewafw.md").unwrap();
+        assert!(written.contains("A dossier about the font."), "{written:?}");
+        assert!(written.contains("[Link to task](The link.)"), "{written:?}");
+    }
+
+    #[test]
+    fn a_dossier_takes_no_link_when_the_answers_end_after_the_description() {
+        let scratch = Scratch::new("new-dossier-no-link").unwrap();
+        let answers = Cursor::new("Nothing to link to.\n.\n");
+
+        let base = base(&scratch);
+        run_in(
+            scratch.path(),
+            Some(&base),
+            &args("5678 - quiet"),
+            Palette::OFF,
+            answers,
+        )
+        .unwrap();
+
+        let written = scratch.read("dossiers/5678 - quiet.md").unwrap();
+        assert!(written.contains("Nothing to link to."), "{written:?}");
+        assert!(!written.contains("[Link to task]"), "{written:?}");
+    }
+
+    #[test]
+    fn a_dossier_that_already_exists_is_left_alone() {
+        let scratch = Scratch::new("new-dossier-twice").unwrap();
+        scratch.write("dossiers/1 - here.md", "# Mine\n").unwrap();
+
+        let base = base(&scratch);
+        let error = run_in(
+            scratch.path(),
+            Some(&base),
+            &args("1 - here"),
+            Palette::OFF,
+            Cursor::new("...\n"),
+        )
+        .unwrap_err();
+
+        // The refusal names the file the way the message would have: the same
+        // name relative to where the user is standing.
+        assert!(
+            error
+                .to_string()
+                .contains("already exists at 'dossiers/1 - here.md'"),
+            "{error}"
+        );
+        assert_eq!(scratch.read("dossiers/1 - here.md").unwrap(), "# Mine\n");
+    }
 }

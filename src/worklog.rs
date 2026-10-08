@@ -41,6 +41,43 @@ pub fn has_worklog(content: &str) -> bool {
     section(&to_lines(content), WORKLOG_HEADING).is_some()
 }
 
+/// Every `### date` block in a dossier's `## Worklog`, in document order.
+///
+/// Each block is the raw text between its heading and the next `###`, which is
+/// what `bureau report` renders. A dossier without a worklog has none, and a
+/// date that appears twice appears twice: merging repeated days is the
+/// report's business, not this function's.
+#[must_use]
+pub fn worklog_days(content: &str) -> Vec<(NaiveDate, String)> {
+    let lines = to_lines(content);
+    let Some((heading, end)) = section(&lines, WORKLOG_HEADING) else {
+        return Vec::new();
+    };
+
+    let mut days = Vec::new();
+    let mut index = after(heading);
+
+    while index < end {
+        let Some(line) = lines.get(index) else {
+            break;
+        };
+
+        if let Some(date) = heading_date(line) {
+            let block_end = sub_section_end(&lines, after(index), end);
+            let block = lines
+                .get(after(index)..block_end)
+                .unwrap_or_default()
+                .concat();
+            days.push((date, block));
+            index = block_end;
+        } else {
+            index = after(index);
+        }
+    }
+
+    days
+}
+
 /// Add `message` to the worklog in `content`, under `date`.
 ///
 /// Returns `None` when there is no `## Worklog` section to add it to. A day
@@ -119,6 +156,61 @@ pub fn add_link(content: &str, label: &str, target: &str) -> Option<String> {
         after_last_bullet(&lines, start, end),
         &[link],
     ))
+}
+
+/// An entry's text with its `## Worked on Dossiers` section removed.
+///
+/// What is left is the day's own notes and tasks: the section is an index of
+/// the dossiers that day touched, and a report prints those as `###` blocks of
+/// their own rather than as bullets.
+#[must_use]
+pub fn without_links(content: &str) -> String {
+    let lines = to_lines(content);
+    let Some((heading, end)) = section(&lines, LINKS_HEADING) else {
+        return content.to_owned();
+    };
+
+    let mut kept = String::new();
+    for (index, line) in lines.iter().enumerate() {
+        if (heading..end).contains(&index) {
+            continue;
+        }
+        kept.push_str(line);
+    }
+
+    kept
+}
+
+/// The dossiers an entry links, in the order it links them.
+///
+/// A name is the linked file's stem, which is what a dossier heading uses, so
+/// the report can match a link back to the dossier it points at.
+#[must_use]
+pub fn linked_dossiers(content: &str) -> Vec<String> {
+    let lines = to_lines(content);
+    let Some((heading, end)) = section(&lines, LINKS_HEADING) else {
+        return Vec::new();
+    };
+
+    lines
+        .get(after(heading)..end)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|line| link_stem(line))
+        .collect()
+}
+
+/// The file stem of a `- [label](<target>)` bullet, when that is what it is.
+fn link_stem(line: &str) -> Option<String> {
+    let text = line.trim_start().strip_prefix("- ")?;
+    let target = text.split_once("](")?.1;
+    let target = target.strip_prefix('<').unwrap_or(target);
+    let end = target.find(['>', ')'])?;
+    let name = target.get(..end)?;
+
+    Path::new(name)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
 }
 
 /// The content split into lines, each keeping its own line ending.
@@ -599,6 +691,72 @@ Words.
         assert_eq!(
             append(content, date(2026, 9, 19), "killed 4 goblins").unwrap(),
             expected
+        );
+    }
+
+    #[test]
+    fn reads_each_day_of_a_worklog() {
+        let content = "\
+## Worklog
+### [2024-02-12](<../entries/2024-02-12.md>)
+- Did something
+
+### 2024-02-16
+- Later work
+";
+        let days = worklog_days(content);
+
+        assert_eq!(days.len(), 2);
+        assert_eq!(days.first().unwrap().0, date(2024, 2, 12));
+        assert_eq!(days.first().unwrap().1, "- Did something\n\n");
+        assert_eq!(days.get(1).unwrap().0, date(2024, 2, 16));
+        assert_eq!(days.get(1).unwrap().1, "- Later work\n");
+    }
+
+    #[test]
+    fn a_repeated_day_is_returned_twice() {
+        let content = "## Worklog\n### 2024-02-12\n- first\n### 2024-02-12\n- second\n";
+
+        assert_eq!(worklog_days(content).len(), 2);
+    }
+
+    #[test]
+    fn a_worklog_less_dossier_has_no_days() {
+        assert!(worklog_days("# A dossier\n## Notes\n- nothing\n").is_empty());
+    }
+
+    #[test]
+    fn removes_the_links_section_from_an_entry() {
+        let content = "\
+# 2026-03-23
+
+## Notes
+- [ ] a task
+
+## Worked on Dossiers
+- [a](<../dossiers/a.md>)
+";
+
+        assert_eq!(
+            without_links(content),
+            "# 2026-03-23\n\n## Notes\n- [ ] a task\n\n"
+        );
+        assert_eq!(without_links("# 2026-03-23\n"), "# 2026-03-23\n");
+    }
+
+    #[test]
+    fn reads_linked_dossiers_in_order() {
+        let content = "\
+## Worked on Dossiers
+- [1234 - refactor](<../dossiers/1234 - refactor.md>)
+- [9820](<../dossiers/9820.md>)
+- not a link
+- [no target]()
+";
+
+        assert_eq!(
+            linked_dossiers(content),
+            vec!["1234 - refactor".to_owned(), "9820".to_owned()]
         );
     }
 }

@@ -25,22 +25,6 @@
 - [ ] `bureau doctor`: for checking formatting issues
       - Broken links
       - Anything else?
-- [ ] `bureau report [<when>] [--from <date>] [--to <date>] [--no-diff] [--filter] [--menu]`:
-      print a reproducible report of the work in a period, built from the notes'
-      contents (worklog dates own the period), with committed git diffs as an
-      appendix. Design settled in `docs/subcommands/report.md`; implementation
-      still to do. Key decisions: files are the source of truth and git is
-      evidence; sealed dossiers and daily entries are included; days without
-      work are omitted; the period is inclusive and "no work in range" is an
-      error; no `--json` for now; no LLM dependency.
-- [ ] `bureau report`'s `<when>`, `--from` and `--to`, and `bureau worklog
-      --date <date>` (TBD), must accept dates in plain english and share one
-      grammar (`src/date.rs`, TBD). The decision is a small hand-rolled closed
-      grammar; the evaluated candidate crates are in
-      `docs/subcommands/report.md`.
-- [ ] `bureau report`'s git diff: `git diff --follow` needs git >= 2.47 and
-      exactly one path. Decide the fallback for older git before implementing
-      (currently: rename detection only). Tracked in `docs/subcommands/report.md`.
 - [ ] `bureau new dossier`: after creating a new dossier, run `bureau worklog`, add the message "created dossier", and link this new dossier to today's entry. If the latter doesn't exist, simply create it then.
       - By "run `bureau worklog`" I mean doing so without shelling out
 - [ ] Reading a note in full just to check whether it is sealed: `is_sealed` only
@@ -49,7 +33,6 @@
       dossiers; low value while notes are small, so it was left alone.
 - [ ] Shell completion for bash and fish
 - [ ] Fix commit behavior. Whenever any `bureau` command is run, all files dependant on `bureau` (for now only entries/ and dossiers/) need to be committed. Need to discuss whether to create 1 commit per file, 1 commit per type of file (e.g. 1 commit for all daily entries, another for all dossiers). The problem to fix is that, after manually editing some files already created with `bureau new`, the changes aren't committed automatically, and then the user needs to do so manually, which is undesired.
-- [ ] `bureau new (dossier|entry)`: print the name of the created file
 - [ ] Maybe fix later: `bureau tasks` treats a task inside a fenced (or indented)
       code block as real work. `Tree::parse` only looks for a leading `-`, so an
       example checklist pasted into a dossier shows up in the listing. No
@@ -63,4 +46,50 @@
       choosing the output shape is the work. General features come first, so
       this is not a priority.
 
-## Current features
+- [ ] `bureau report` diff size: a dossier created in the period diffs as its
+      whole file, so `## Git diff` can dwarf the daily work that is the
+      report's point. Consider a per-dossier `--numstat` line and a
+      `--diff=full|stat|none` switch, or `--no-diff` plus `--stat`.
+- [ ] `bureau report --brief`: one line per day, for a standup or a CV, with the
+      full report left as the appendix. Also `--group dossier`, a dossier-major
+      view that matches the diff half's order.
+- [ ] `bureau report --filter`/`--menu`: a report about one dossier repeats that
+      dossier's name three times -- once in the scope line under the title, once
+      as the `###` heading in the daily work, once as the `###` heading in the
+      diff half. With the scope line in place the two headings say nothing new,
+      so the filtered report should drop them:
+
+          # Report from 2025-10-05 to 2026-10-05
+
+          Dossier: 9820 - mine crypto
+
+
+          ## 2026-09-20 (Sunday)
+          - bought a new gpu
+
+
+          ## Git diff
+          (No git changes were found)
+
+      Losing the `###` headings also takes away the two blank lines that
+      preceded them and the one that followed, so revisit the blank-line rule
+      for a filtered report: with only `##` sections left, two empty lines
+      between the scope line, each day and `## Git diff` may read as too much
+      air. The `###` headings in the diff half are the same story from the
+      other side: with the scope line naming the dossier, each diff block needs
+      only its content, and the fold markers already delimit it.
+- [ ] `bureau report`: an entry's own sections (`## Notes`, printed as
+      `### Notes`) could be bold in a plain colour, to give the day's structure
+      a little more contrast against the bullets under it. It is the same idea
+      as the heading colours, one level down, and it stays redundant: the `###`
+      already says it is a heading.
+- [ ] `bureau report`: consider the same inside a diff block, where git paints
+      the lines and the report deliberately passes them through untouched. Git's
+      own slots can carry attributes, so `-c color.diff.old="bold red"`,
+      `-c color.diff.new="bold green"` and `-c color.diff.context="bold white"`
+      would bold the sections while keeping the red/green that a reader already
+      knows -- no parsing of the diff, just three more pinned `-c` values, and
+      `color.diff.context` is not pinned today at all, so a user's config can
+      already colour it. Weigh it against the rule that the report never
+      repaints a diff: white is a hue nothing else in the report uses, so the
+      context lines would gain a colour the palette does not otherwise have.

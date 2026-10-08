@@ -1,9 +1,11 @@
-//! Colour for `bureau tasks`.
+//! Colour for `bureau tasks`, `bureau report` and the paths `bureau new`
+//! prints.
 //!
-//! The rules are in `docs/subcommands/tasks.md`; the whole of the
-//! implementation is the table in [`Palette::ON`]. Colour is a redundant
-//! encoding on purpose: every hue repeats something the line already says, so a
-//! run with colour off loses nothing but the aid to scanning.
+//! The rules for a listing and a report are in `docs/subcommands/tasks.md` and
+//! `docs/subcommands/report.md`; the whole of the implementation is the table
+//! in [`Palette::ON`]. Colour is a redundant encoding on purpose: every hue
+//! repeats something the line already says, so a run with colour off loses
+//! nothing but the aid to scanning.
 
 use std::env;
 use std::io::IsTerminal;
@@ -44,13 +46,15 @@ const RESET: &str = "\x1b[0m";
 /// these names are what it is guaranteed to have an opinion about.
 const BLUE: Style = Style { open: "\x1b[34m" };
 const CYAN: Style = Style { open: "\x1b[36m" };
-const YELLOW: Style = Style { open: "\x1b[33m" };
+const MAGENTA: Style = Style { open: "\x1b[35m" };
 const GREEN: Style = Style { open: "\x1b[32m" };
 const DIM: Style = Style { open: "\x1b[2m" };
 const BOLD: Style = Style { open: "\x1b[1m" };
 const BOLD_BLUE: Style = Style { open: "\x1b[1;34m" };
-const BOLD_YELLOW: Style = Style { open: "\x1b[1;33m" };
+const BOLD_CYAN: Style = Style { open: "\x1b[1;36m" };
+const BOLD_MAGENTA: Style = Style { open: "\x1b[1;35m" };
 const BOLD_GREEN: Style = Style { open: "\x1b[1;32m" };
+const BOLD_YELLOW: Style = Style { open: "\x1b[1;33m" };
 
 /// The colours a run draws with.
 ///
@@ -69,8 +73,19 @@ pub struct Palette {
     done: Style,
     /// A source heading, entry or dossier.
     heading_style: Style,
+    /// The path `bureau new` reports it has written.
+    path_style: Style,
     /// Everything else printed: the lines that only lead to a task.
     context_style: Style,
+    /// A warning, which goes to stderr rather than into the report.
+    warning_style: Style,
+    /// The report's own structure, which `tasks` never asks for: its title, its
+    /// `##` headings (a day, the diff section), its `###` dossier headings, and
+    /// the scaffolding around a diff (its fold markers and its backtick fence).
+    title_style: Style,
+    subheading_style: Style,
+    dossier_style: Style,
+    scaffold_style: Style,
 }
 
 impl Palette {
@@ -84,21 +99,36 @@ impl Palette {
         waiting: Style::NONE,
         done: Style::NONE,
         heading_style: Style::NONE,
+        path_style: Style::NONE,
         context_style: Style::NONE,
+        warning_style: Style::NONE,
+        title_style: Style::NONE,
+        subheading_style: Style::NONE,
+        dossier_style: Style::NONE,
+        scaffold_style: Style::NONE,
     };
 
-    /// Blue for what can be picked up, cyan for what has been started, yellow
-    /// for what is waiting on somebody else, green for what is over.
+    /// Blue for what can be picked up, cyan for what has been started, magenta
+    /// for what is waiting on somebody else, green for what is over. The report
+    /// draws structure instead of state: a bold magenta title, bold cyan `##`
+    /// headings, bold blue dossier headings, and dim scaffolding around a diff.
+    /// `bureau new` draws a plain sentence whose path is cyan.
     pub const ON: Self = Self {
         actionable: BOLD_BLUE,
-        blocked: BOLD_YELLOW,
+        blocked: BOLD_MAGENTA,
         finished: BOLD_GREEN,
         todo: BLUE,
         started: CYAN,
-        waiting: YELLOW,
+        waiting: MAGENTA,
         done: GREEN,
         heading_style: BOLD,
+        path_style: CYAN,
         context_style: DIM,
+        warning_style: BOLD_YELLOW,
+        title_style: BOLD_MAGENTA,
+        subheading_style: BOLD_CYAN,
+        dossier_style: BOLD_BLUE,
+        scaffold_style: DIM,
     };
 
     /// The style a section's rule is drawn in.
@@ -147,10 +177,55 @@ impl Palette {
         self.heading_style
     }
 
+    /// The style a path is drawn in, in the one line `bureau new` prints.
+    ///
+    /// The path carries no state and no structure; the hue is there to pick the
+    /// one thing a person may want to copy out of the line.
+    #[must_use]
+    pub const fn path(self) -> Style {
+        self.path_style
+    }
+
+    /// The style the report's title is drawn in.
+    #[must_use]
+    pub const fn title(self) -> Style {
+        self.title_style
+    }
+
+    /// The style the report's `##` headings are drawn in: a day, and the diff
+    /// section as a whole.
+    #[must_use]
+    pub const fn subheading(self) -> Style {
+        self.subheading_style
+    }
+
+    /// The style a dossier's `###` heading is drawn in, in either half of the
+    /// report.
+    #[must_use]
+    pub const fn dossier(self) -> Style {
+        self.dossier_style
+    }
+
+    /// The style the scaffolding around a diff is drawn in: the fold markers
+    /// and the backtick fence, which are machinery rather than content.
+    #[must_use]
+    pub const fn scaffold(self) -> Style {
+        self.scaffold_style
+    }
+
     /// The style a line that only leads to a task is drawn in.
     #[must_use]
     pub const fn context(self) -> Style {
         self.context_style
+    }
+
+    /// The style a warning is drawn in.
+    ///
+    /// This is the one hue the report itself never uses, so a warning printed
+    /// beside it cannot be mistaken for a line of it.
+    #[must_use]
+    pub const fn warning(self) -> Style {
+        self.warning_style
     }
 }
 
@@ -161,10 +236,24 @@ impl Palette {
 /// anything non-empty, and `TERM=dumb`.
 #[must_use]
 pub fn for_stdout() -> Palette {
+    palette_for(std::io::stdout().is_terminal())
+}
+
+/// The palette for a run writing to standard error.
+///
+/// Warnings are the only thing written there. They are coloured even when the
+/// report itself is a pipe and therefore plain, so a notice still stands out.
+#[must_use]
+pub fn for_stderr() -> Palette {
+    palette_for(std::io::stderr().is_terminal())
+}
+
+/// The palette for a stream, or plain text when the user asked for it.
+fn palette_for(terminal: bool) -> Palette {
     let no_color = env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty());
     let dumb_terminal = env::var_os("TERM").is_some_and(|term| term == "dumb");
 
-    if wanted(std::io::stdout().is_terminal(), no_color, dumb_terminal) {
+    if wanted(terminal, no_color, dumb_terminal) {
         Palette::ON
     } else {
         Palette::OFF
@@ -214,7 +303,7 @@ mod tests {
             palette
                 .marker(Section::Blocked, State::Waiting)
                 .map(|s| s.paint("[?]")),
-            Some("\x1b[33m[?]\x1b[0m".to_owned())
+            Some("\x1b[35m[?]\x1b[0m".to_owned())
         );
         assert_eq!(
             palette
@@ -256,7 +345,12 @@ mod tests {
             palette.section(Section::Blocked),
             palette.section(Section::Finished),
             palette.heading(),
+            palette.path(),
             palette.context(),
+            palette.title(),
+            palette.subheading(),
+            palette.dossier(),
+            palette.scaffold(),
             palette
                 .marker(Section::Actionable, State::Todo)
                 .unwrap_or(Style::NONE),
@@ -295,12 +389,68 @@ mod tests {
             palette.heading().paint("# 1 - a dossier"),
             "# 1 - a dossier"
         );
+        assert_eq!(
+            palette.path().paint("entries/2026-09-20.md"),
+            "entries/2026-09-20.md"
+        );
         assert_eq!(palette.context().paint("- [x] context"), "- [x] context");
+        assert_eq!(
+            palette.title().paint("# Report for 2026-09-20"),
+            "# Report for 2026-09-20"
+        );
+        assert_eq!(palette.subheading().paint("## 2026-09-20"), "## 2026-09-20");
+        assert_eq!(
+            palette.dossier().paint("### 1 - a dossier"),
+            "### 1 - a dossier"
+        );
+        assert_eq!(palette.scaffold().paint("{{{ git diff"), "{{{ git diff");
         assert_eq!(
             palette
                 .marker(Section::Actionable, State::Todo)
                 .map(|s| s.paint("[ ]")),
             Some("[ ]".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_report_draws_structure_not_state() {
+        let palette = Palette::ON;
+
+        assert_eq!(
+            palette.title().paint("# Report for 2026-09-20"),
+            "\x1b[1;35m# Report for 2026-09-20\x1b[0m"
+        );
+        assert_eq!(
+            palette.subheading().paint("## Complete git diff"),
+            "\x1b[1;36m## Complete git diff\x1b[0m"
+        );
+        assert_eq!(
+            palette.dossier().paint("### 1234 - a dossier"),
+            "\x1b[1;34m### 1234 - a dossier\x1b[0m"
+        );
+        assert_eq!(
+            palette.scaffold().paint("{{{ git diff"),
+            "\x1b[2m{{{ git diff\x1b[0m"
+        );
+        assert_eq!(palette.scaffold().paint("```diff"), "\x1b[2m```diff\x1b[0m");
+    }
+
+    #[test]
+    fn a_warning_is_yellow_while_the_report_never_is() {
+        assert_eq!(
+            Palette::ON.warning().paint("warning: x"),
+            "\x1b[1;33mwarning: x\x1b[0m"
+        );
+        assert_eq!(Palette::OFF.warning().paint("warning: x"), "warning: x");
+    }
+
+    #[test]
+    fn a_created_path_is_cyan_and_nothing_else_in_the_line_is() {
+        // The sentence around the path stays plain: the path is the one thing
+        // in it a person may want to pick out.
+        assert_eq!(
+            Palette::ON.path().paint("entries/2026-09-20.md"),
+            "\x1b[36mentries/2026-09-20.md\x1b[0m"
         );
     }
 }

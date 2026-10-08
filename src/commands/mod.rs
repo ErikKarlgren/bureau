@@ -2,13 +2,14 @@
 
 mod new;
 mod paths;
+mod report;
 mod selection;
 mod sources;
 mod tasks;
 mod worklog;
 
 #[cfg(test)]
-mod tests;
+pub mod tests;
 
 use crate::Result;
 use crate::cli::{Command, NewCommand};
@@ -28,5 +29,6 @@ pub fn run(command: Command) -> Result<()> {
         },
         Command::Worklog(args) => worklog::run(&args),
         Command::Tasks(args) => tasks::run(&args),
+        Command::Report(args) => report::run(&args),
     }
 }

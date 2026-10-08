@@ -2,8 +2,10 @@
 
 mod cli;
 mod commands;
+mod date;
 mod dossier;
 mod git;
+mod report;
 mod style;
 mod tasks;
 mod template;
