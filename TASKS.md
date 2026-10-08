@@ -31,6 +31,17 @@
       looks at the leading frontmatter, but `source_of` reads the whole file.
       Reading just the head would save the I/O and the allocation on large
       dossiers; low value while notes are small, so it was left alone.
+- [ ] `bureau report` performance: mention (or write) a commit-graph. The
+      path-limited history walk that finds each dossier's base commit costs
+      ~1.2 µs per commit traversed, and `git commit-graph write --reachable`
+      made the same query 2.4× faster (24.60 ms → 60.23 ms without it) on a
+      20,000-commit repository with no code change at all. It is a repository
+      setting rather than something bureau should do behind the user's back,
+      so this is a README or a `bureau doctor` line, not a feature.
+- [ ] `bureau report` reads each dossier twice: once for its worklog days and
+      once again when the diff half collects the paths. Harmless while
+      dossiers are small, but the worklog contents are already in hand when
+      `batch_diffs` runs.
 - [ ] Shell completion for bash and fish
 - [ ] Fix commit behavior. Whenever any `bureau` command is run, all files dependant on `bureau` (for now only entries/ and dossiers/) need to be committed. Need to discuss whether to create 1 commit per file, 1 commit per type of file (e.g. 1 commit for all daily entries, another for all dossiers). The problem to fix is that, after manually editing some files already created with `bureau new`, the changes aren't committed automatically, and then the user needs to do so manually, which is undesired.
 - [ ] Maybe fix later: `bureau tasks` treats a task inside a fenced (or indented)

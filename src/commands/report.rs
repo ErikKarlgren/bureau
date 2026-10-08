@@ -1,6 +1,6 @@
 //! `bureau report`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -36,6 +36,22 @@ pub struct DiffRequest {
     pub color: bool,
 }
 
+/// The diffs for a whole report's worth of dossiers, in the order asked.
+///
+/// The differ is handed every request at once rather than one at a time,
+/// because the expensive part of a report -- walking the history to find each
+/// dossier's base commit, and diffing it -- can be done for all of them in a
+/// handful of git calls instead of several per dossier. A test hands in a
+/// closure with this shape to drive the report without a git repository.
+pub type Differ<'a> = dyn Fn(&[DiffRequest]) -> Result<Vec<DiffOutcome>> + 'a;
+
+/// One dossier's diff, or the error that kept the report from reading it.
+pub type DiffOutcome = Result<String>;
+
+/// The report's diffs and the warnings they produced, one per dossier and in
+/// the order the report prints them.
+type DiffSection = (Vec<(String, Changes)>, Vec<String>);
+
 /// Print a report of the work in a period.
 ///
 /// # Errors
@@ -48,34 +64,17 @@ pub fn run(args: &ReportArgs) -> Result<()> {
     let today = Local::now().date_naive();
     let palette = style::for_stdout();
 
-    // A report with no diff section needs neither the version nor a HEAD, so
-    // neither is asked for.
-    let (follow, follow_warning, has_head) = if args.no_diff {
-        (true, None, true)
+    // A report with no diff section touches no commit and no tree, so the
+    // repository is not read at all: no HEAD check, no empty tree, no walk.
+    let has_head = if args.no_diff {
+        true
     } else {
-        let version = git::version()?;
-        let supported = git::follows_renames(&version);
-        let warning = (!supported).then(|| {
-            format!(
-                "git {version} does not support 'git diff --follow' (needs 2.47), \
-                 so renames are not followed"
-            )
-        });
-        (supported, warning, git::has_head(&root)?)
+        git::has_head(&root)?
     };
 
-    let differ = |request: &DiffRequest| {
-        if has_head {
-            real_diff(&root, request, follow)
-        } else {
-            Ok(String::new())
-        }
-    };
+    let differ = |requests: &[DiffRequest]| batch_diffs(&root, requests, has_head);
 
-    let (output, mut warnings) = run_in(&root, args, palette, today, differ, selection::pick)?;
-    if let Some(warning) = follow_warning {
-        warnings.insert(0, warning);
-    }
+    let (output, warnings) = run_in(&root, args, palette, today, &differ, selection::pick)?;
 
     let warning_style = style::for_stderr().warning();
     for warning in &warnings {
@@ -93,7 +92,7 @@ fn run_in(
     args: &ReportArgs,
     palette: Palette,
     today: NaiveDate,
-    differ: impl Fn(&DiffRequest) -> Result<String>,
+    differ: &Differ<'_>,
     picker: impl Fn(&[PathBuf]) -> Result<PathBuf>,
 ) -> Result<(String, Vec<String>)> {
     let (from, to) = crate::date::range(
@@ -179,38 +178,11 @@ fn run_in(
         );
     }
 
-    let mut diffs: Vec<(String, Changes)> = Vec::new();
-    let mut warnings = Vec::new();
-    if !args.no_diff {
-        for name in report::dossier_order(&days) {
-            let Some(path) = chosen.iter().find(|path| worklog::stem(path) == name) else {
-                continue;
-            };
-
-            let request = DiffRequest {
-                path: path.clone(),
-                from,
-                to,
-                today,
-                color: palette == Palette::ON,
-            };
-
-            // A dossier the daily work mentions always gets a block: an empty
-            // diff or a git that could not be read is said out loud in the
-            // report, because a warning on stderr is lost the moment stdout is
-            // redirected to a file.
-            match differ(&request) {
-                Ok(diff) if !diff.trim().is_empty() => {
-                    diffs.push((name, Changes::Diff(diff)));
-                }
-                Ok(_) => diffs.push((name, Changes::None)),
-                Err(error) => {
-                    warnings.push(format!("could not diff '{name}': {error:#}"));
-                    diffs.push((name, Changes::Unavailable));
-                }
-            }
-        }
-    }
+    let (diffs, warnings) = if args.no_diff {
+        (Vec::new(), Vec::new())
+    } else {
+        collect_diffs(&days, &chosen, from, to, today, palette, differ)?
+    };
 
     Ok((
         report::render(from, to, &days, &diffs, scope.as_deref(), palette),
@@ -218,45 +190,319 @@ fn run_in(
     ))
 }
 
-/// The diff of one dossier over the period, as git sees it.
+/// Ask the differ about every dossier in the report, in the order they print.
 ///
-/// The base is the newest commit touching the dossier strictly before `from`,
-/// or the empty tree when the dossier did not exist yet; the head is `HEAD`, or
-/// the newest commit on or before `to` when the period ends in the past.
-fn real_diff(root: &Path, request: &DiffRequest, follow: bool) -> Result<String> {
-    let empty = git::empty_tree(root)?;
-    let base =
-        git::last_commit(root, request.from, &request.path)?.unwrap_or_else(|| empty.clone());
+/// Every dossier is asked about at once, so the history behind the report is
+/// walked once for the period rather than once per dossier.
+fn collect_diffs(
+    days: &[report::Day],
+    chosen: &[PathBuf],
+    from: NaiveDate,
+    to: NaiveDate,
+    today: NaiveDate,
+    palette: Palette,
+    differ: &Differ<'_>,
+) -> Result<DiffSection> {
+    let requests: Vec<DiffRequest> = report::dossier_order(days)
+        .into_iter()
+        .filter_map(|name| {
+            let path = chosen
+                .iter()
+                .find(|path| worklog::stem(path) == name)?
+                .clone();
 
-    let head = if request.to < request.today {
-        let before = request
+            Some(DiffRequest {
+                path,
+                from,
+                to,
+                today,
+                color: palette == Palette::ON,
+            })
+        })
+        .collect();
+
+    let mut diffs = Vec::new();
+    let mut warnings = Vec::new();
+
+    for (request, result) in requests.iter().zip(differ(&requests)?) {
+        let name = worklog::stem(&request.path);
+
+        // A dossier the daily work mentions always gets a block: an empty diff
+        // or a git that could not be read is said out loud in the report,
+        // because a warning on stderr is lost the moment stdout is redirected
+        // to a file.
+        match result {
+            Ok(diff) if !diff.trim().is_empty() => diffs.push((name, Changes::Diff(diff))),
+            Ok(_) => diffs.push((name, Changes::None)),
+            Err(error) => {
+                warnings.push(format!("could not diff '{name}': {error:#}"));
+                diffs.push((name, Changes::Unavailable));
+            }
+        }
+    }
+
+    Ok((diffs, warnings))
+}
+
+/// The diffs of a whole report, with as few git calls as the shape allows.
+///
+/// Two history walks answer every dossier at once: one for the base commit each
+/// dossier's diff starts from, and -- only when the period ends in the past,
+/// where the head is not simply `HEAD` -- one for the head each one ends at.
+/// The diffs themselves are then one `git diff` per distinct (base, head) pair,
+/// which in the usual case is a single pair and so a single call.
+///
+/// A pair whose diff fails marks only its own dossiers unreadable; the rest of
+/// the report is still produced.
+fn batch_diffs(
+    root: &Path,
+    requests: &[DiffRequest],
+    has_head: bool,
+) -> Result<Vec<Result<String>>> {
+    if !has_head {
+        return Ok(requests.iter().map(|_| Ok(String::new())).collect());
+    }
+
+    let Some(first) = requests.first() else {
+        return Ok(Vec::new());
+    };
+
+    // The empty tree is what a dossier created inside the period is diffed
+    // against, and it is computed once for the whole batch rather than once per
+    // dossier, which is where a `git mktree` per dossier used to come from.
+    let empty = git::empty_tree(root)?;
+
+    // Git names paths relative to the root, whatever the pathspec looked like,
+    // so every lookup has to use that form.
+    let paths: Vec<&Path> = requests
+        .iter()
+        .map(|request| git::relative(root, &request.path))
+        .collect();
+    let bases = git::last_commits(root, first.from, paths.iter().copied())?;
+
+    // A period that ends in the past stops at the newest commit on or before
+    // its last day; a period that runs up to today stops at `HEAD`.
+    let heads = if first.to < first.today {
+        let after = first
             .to
             .succ_opt()
             .context("the period ends at the last date this tool can represent")?;
-        match git::last_commit(root, before, &request.path)? {
-            Some(hash) => hash,
-            None => return Ok(String::new()),
-        }
+        Some(git::last_commits(root, after, paths.iter().copied())?)
     } else {
-        String::from("HEAD")
+        None
     };
 
-    git::diff(
-        root,
-        &base,
-        &head,
-        &request.path,
-        follow && base != empty,
-        request.color,
-    )
+    // The pair each path is compared under, and the paths that share one, so
+    // that a single diff call answers every dossier with the same pair. An
+    // empty head means the period ended before the dossier existed.
+    let mut pairs: HashMap<&Path, (String, String)> = HashMap::new();
+    let mut groups: HashMap<(String, String), Vec<&Path>> = HashMap::new();
+
+    for path in &paths {
+        let key = path
+            .to_str()
+            .with_context(|| format!("'{}' is not a UTF-8 path", path.display()))?;
+
+        let base = bases.get(key).cloned().unwrap_or_else(|| empty.clone());
+
+        let head = if let Some(heads) = &heads {
+            let Some(head) = heads.get(key) else {
+                // The period ended before this dossier existed at all.
+                pairs.insert(path, (base, String::new()));
+                continue;
+            };
+            head.clone()
+        } else {
+            String::from("HEAD")
+        };
+
+        groups
+            .entry((base.clone(), head.clone()))
+            .or_default()
+            .push(path);
+        pairs.insert(path, (base, head));
+    }
+
+    let mut diffs: HashMap<&Path, Result<String>> = HashMap::new();
+    for ((base, head), paths) in &groups {
+        // A failed call is one answer for every path that shared its pair.
+        match git::diffs(root, Some(base), head, paths.iter().copied(), first.color) {
+            Ok(all) => {
+                for path in paths {
+                    // `all` is keyed the way git named the path, which is the
+                    // relative path this report collected, not the absolute
+                    // one the request carries.
+                    let key = path
+                        .to_str()
+                        .with_context(|| format!("'{}' is not a UTF-8 path", path.display()))?;
+                    diffs.insert(path, Ok(all.get(key).cloned().unwrap_or_default()));
+                }
+            }
+            Err(error) => {
+                let message = format!("{error:#}");
+                for path in paths {
+                    diffs.insert(path, Err(anyhow::Error::msg(message.clone())));
+                }
+            }
+        }
+    }
+
+    Ok(requests
+        .iter()
+        .zip(&paths)
+        .map(|(_, path)| {
+            let path = *path;
+            let Some((_, head)) = pairs.get(path) else {
+                return Ok(String::new());
+            };
+
+            // A period that ended before the dossier existed has no diff.
+            if head.is_empty() {
+                return Ok(String::new());
+            }
+
+            diffs.remove(path).unwrap_or_else(|| Ok(String::new()))
+        })
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::process::Command;
 
     use super::*;
     use crate::commands::tests::Scratch;
+
+    /// A date, spelled out so a test reads as the day it means.
+    fn date(year: i32, month: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(year, month, day).unwrap()
+    }
+
+    /// Run git in `root`, failing the test when it does.
+    fn git(root: &Path, args: &[&str]) {
+        git_at(root, args, "2026-09-15T12:00:00");
+    }
+
+    /// Run git with the committer and author dates pinned, so a test that asks
+    /// the history for "before this day" does not depend on the day it runs.
+    fn git_at(root: &Path, args: &[&str], when: &str) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .env("GIT_AUTHOR_NAME", "bureau")
+            .env("GIT_AUTHOR_EMAIL", "bureau@example.invalid")
+            .env("GIT_COMMITTER_NAME", "bureau")
+            .env("GIT_COMMITTER_EMAIL", "bureau@example.invalid")
+            .env("GIT_AUTHOR_DATE", when)
+            .env("GIT_COMMITTER_DATE", when)
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// A committed dossier, changed and committed again, plus one that is
+    /// touched a third time, so a batch has two commits to group by.
+    fn committed(name: &str) -> Scratch {
+        let scratch = Scratch::new(name).unwrap();
+        let root = scratch.path();
+        git(root, &["init", "-q"]);
+        scratch
+            .write("dossiers/A.md", "## Worklog\n### 2026-09-20\n- did A\n")
+            .unwrap();
+        scratch
+            .write("dossiers/B.md", "## Worklog\n### 2026-09-20\n- did B\n")
+            .unwrap();
+        git(root, &["add", "-A"]);
+        git_at(root, &["commit", "-qm", "base"], "2026-09-10T12:00:00");
+        scratch
+            .write(
+                "dossiers/A.md",
+                "## Worklog\n### 2026-09-20\n- did A\n- and again\n",
+            )
+            .unwrap();
+        git_at(
+            root,
+            &["commit", "-qam", "A moves on"],
+            "2026-09-20T12:00:00",
+        );
+        scratch
+            .write(
+                "dossiers/B.md",
+                "## Worklog\n### 2026-09-20\n- did B\n- and again\n",
+            )
+            .unwrap();
+        git_at(
+            root,
+            &["commit", "-qam", "B moves on"],
+            "2026-09-21T12:00:00",
+        );
+        scratch
+    }
+
+    /// One dossier's diff, as a single-path `git diff` with the report's own
+    /// pinned settings produces it.
+    fn one_path(root: &Path, base: &str, head: &str, relative: &str) -> String {
+        let output = Command::new("git")
+            .args(["-c", "diff.algorithm=histogram"])
+            .args(["diff", "--no-color", base, head, "--", relative])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    #[test]
+    fn a_batch_answers_each_dossier_what_git_would_alone() {
+        let scratch = committed("report-batch");
+        let root = scratch.path();
+
+        // The report's period ends in the past, so the head is a commit rather
+        // than `HEAD` and both walks are exercised.
+        // Absolute paths, because that is what `sources::read_markdown` hands
+        // the report: git answers with paths relative to the root either way,
+        // which is the mismatch this test exists to catch.
+        let names = ["dossiers/A.md", "dossiers/B.md"];
+        let requests: Vec<DiffRequest> = names
+            .iter()
+            .map(|path| DiffRequest {
+                path: root.join(path),
+                from: date(2026, 9, 15),
+                to: date(2026, 9, 25),
+                today: date(2026, 12, 31),
+                color: false,
+            })
+            .collect();
+
+        let diffs = batch_diffs(root, &requests, true).unwrap();
+        assert_eq!(diffs.len(), 2);
+
+        for ((name, request), diff) in names.iter().zip(&requests).zip(diffs) {
+            let diff = diff.unwrap();
+
+            // The same base and head the batch should have chosen, asked for
+            // one dossier at a time.
+            let path = git::relative(root, &request.path);
+            let base = git::last_commits(root, request.from, [path])
+                .unwrap()
+                .get(*name)
+                .cloned()
+                .unwrap();
+            let head = git::last_commits(root, date(2026, 9, 26), [path])
+                .unwrap()
+                .get(*name)
+                .cloned()
+                .unwrap();
+
+            assert_eq!(diff, one_path(root, &base, &head, name));
+            assert!(!diff.is_empty(), "{name} has no diff");
+        }
+    }
 
     /// Arguments for one fixed period, so no test depends on today.
     fn args() -> ReportArgs {
@@ -280,9 +526,30 @@ mod tests {
         bail!("the picker should not have been opened")
     }
 
-    /// A differ that names the dossier it was asked about.
-    fn named() -> impl Fn(&DiffRequest) -> Result<String> {
-        |request| Ok(format!("diff of {}\n", request.path.display()))
+    /// A differ that names each dossier it was asked about.
+    // The differ's shape has a `Result` for the whole batch because the git
+    // one can fail; this stand-in cannot, and the signature is the point.
+    #[allow(clippy::unnecessary_wraps)]
+    fn named(requests: &[DiffRequest]) -> Result<Vec<DiffOutcome>> {
+        Ok(requests
+            .iter()
+            .map(|request| Ok(format!("diff of {}\n", request.path.display())))
+            .collect())
+    }
+
+    /// A differ that answers every dossier the same way.
+    fn always(diff: &'static str) -> impl Fn(&[DiffRequest]) -> Result<Vec<DiffOutcome>> {
+        move |requests: &[DiffRequest]| Ok(requests.iter().map(|_| Ok(diff.to_owned())).collect())
+    }
+
+    /// A differ whose every dossier fails, with git's own words in the error.
+    fn exploding() -> impl Fn(&[DiffRequest]) -> Result<Vec<DiffOutcome>> {
+        |requests: &[DiffRequest]| {
+            Ok(requests
+                .iter()
+                .map(|_| Err(anyhow::Error::msg("git exploded")))
+                .collect())
+        }
     }
 
     /// A scratch root with one dossier that logged work on the 20th.
@@ -310,7 +577,7 @@ mod tests {
             &args(),
             Palette::OFF,
             today(),
-            named(),
+            &named,
             no_picker,
         )
         .unwrap();
@@ -345,7 +612,7 @@ mod tests {
             &args(),
             Palette::OFF,
             today(),
-            named(),
+            &named,
             no_picker,
         )
         .unwrap();
@@ -358,9 +625,9 @@ mod tests {
     fn no_diff_never_asks_for_a_diff() {
         let scratch = with_dossier("report-no-diff");
         let called = Cell::new(false);
-        let differ = |_: &DiffRequest| {
+        let differ = |requests: &[DiffRequest]| {
             called.set(true);
-            Ok(String::new())
+            Ok(requests.iter().map(|_| Ok(String::new())).collect())
         };
         let mut args = args();
         args.no_diff = true;
@@ -370,7 +637,7 @@ mod tests {
             &args,
             Palette::OFF,
             today(),
-            differ,
+            &differ,
             no_picker,
         )
         .unwrap();
@@ -384,14 +651,14 @@ mod tests {
     #[test]
     fn a_failed_diff_is_a_warning_and_a_note_in_the_report() {
         let scratch = with_dossier("report-diff-fails");
-        let differ = |_: &DiffRequest| bail!("git exploded");
+        let differ = exploding();
 
         let (output, warnings) = run_in(
             scratch.path(),
             &args(),
             Palette::OFF,
             today(),
-            differ,
+            &differ,
             no_picker,
         )
         .unwrap();
@@ -412,14 +679,14 @@ mod tests {
     #[test]
     fn a_dossier_with_no_commits_says_so_and_warns_about_nothing() {
         let scratch = with_dossier("report-no-commits");
-        let differ = |_: &DiffRequest| Ok(String::new());
+        let differ = always("");
 
         let (output, warnings) = run_in(
             scratch.path(),
             &args(),
             Palette::OFF,
             today(),
-            differ,
+            &differ,
             no_picker,
         )
         .unwrap();
@@ -440,7 +707,7 @@ mod tests {
             args,
             Palette::OFF,
             today(),
-            named(),
+            &named,
             no_picker,
         )
     }
@@ -601,7 +868,7 @@ mod tests {
             &args,
             Palette::OFF,
             today(),
-            named(),
+            &named,
             no_picker,
         )
         .unwrap();
@@ -645,15 +912,8 @@ mod tests {
         let mut args = args();
         args.menu = true;
 
-        let (output, _) = run_in(
-            scratch.path(),
-            &args,
-            Palette::OFF,
-            today(),
-            named(),
-            picker,
-        )
-        .unwrap();
+        let (output, _) =
+            run_in(scratch.path(), &args, Palette::OFF, today(), &named, picker).unwrap();
 
         assert!(output.contains("### B"), "{output}");
         assert!(!output.contains("### A"), "{output}");
@@ -672,7 +932,7 @@ mod tests {
             &args,
             Palette::OFF,
             today(),
-            named(),
+            &named,
             no_picker,
         )
         .unwrap();
