@@ -24,6 +24,7 @@
 - [ ] `bureau rename`: for renaming dossiers and all relevant links, cause right now it'd need to be manually done. This would of course also commit the affected files
 - [ ] `bureau doctor`: for checking formatting issues
       - Broken links
+      - Non-crossplatform file names
       - Anything else?
 - [ ] `bureau new dossier`: after creating a new dossier, run `bureau worklog`, add the message "created dossier", and link this new dossier to today's entry. If the latter doesn't exist, simply create it then.
       - By "run `bureau worklog`" I mean doing so without shelling out
@@ -104,3 +105,15 @@
       already colour it. Weigh it against the rule that the report never
       repaints a diff: white is a hue nothing else in the report uses, so the
       context lines would gain a colour the palette does not otherwise have.
+- [ ] Automatic git squashing: squash automatically consecutive commits from
+      the same day. This should make `git rev-parse` quite faster, because as
+      far as I know, its time complexity scales linearly with the amount of
+      commits it needs to traverse. A day is after all the time unit bureau
+      works with.
+- [ ] Let the user have their own custom templates for dossiers and entries.
+- [ ] Rework the UI/UX for `bureau new`. It's pure white text, and it could use
+      some colors and some "readline" implementation (arrows don't work properly
+      when editing text)
+- [ ] `bureau init`: Creates a git repo if it doesn't exist, adds some files
+      with already chosen presets (`.nvim.lua` with pre-configured folds, maybe
+      some git hooks, etc)
