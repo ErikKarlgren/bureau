@@ -48,9 +48,20 @@ created with `bureau new entry`.
 
 While you work, `bureau worklog` records a line against a dossier. The line goes
 under that day's heading in the dossier's `## Worklog` section, and the dossier
-is linked from that day's entry, which is created if it does not exist yet. Both
-files are then committed. The two link to each other, so a dossier shows which
-days were spent on it and an entry shows which dossiers that day touched.
+is linked from that day's entry, which is created if it does not exist yet. If
+the entry already has uncommitted changes, they are committed first as
+`update entry: <date>`; an entry that has to be created is committed as
+`new entry: <date>` on its own, and the link follows in the worklog commit. The
+dossier's new line and the entry's link are then committed together as
+`worklog: <dossier>`. Before asking for the line, `bureau worklog` previews the
+dossier's uncommitted changes, or warns when there are none, and after the
+commits it prints a compact summary of the ones it made. The two files link to
+each other, so a dossier shows which days were spent on it and an entry shows
+which dossiers that day touched.
+
+All commits are titled `<action>: <file stem>`, for example
+`new dossier: 1234 - foo`, `new entry: 2026-10-17`, `update entry: 2026-10-17`
+and `worklog: 1234 - foo`.
 
 New files start from [`templates/dossier.md`](templates/dossier.md) and
 [`templates/daily-entry.md`](templates/daily-entry.md). Those templates are

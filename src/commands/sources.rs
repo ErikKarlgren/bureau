@@ -9,6 +9,7 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 
 use crate::commands::paths::DOSSIERS_DIR;
+use crate::style;
 
 /// One markdown file in the repository, and whether it is sealed.
 #[derive(Debug)]
@@ -62,7 +63,10 @@ pub fn read_markdown(root: &Path, directory: &str) -> Result<Vec<Source>> {
                 // A permission error, a broken symlink, a directory that
                 // happens to end in `.md`: one bad file must not cost the user
                 // the whole listing. Say what was skipped and carry on.
-                Err(error) => eprintln!("warning: {error:#}"),
+                Err(error) => eprintln!(
+                    "{}",
+                    style::for_stderr().warning_line(format_args!("{error:#}"))
+                ),
             }
         }
     }

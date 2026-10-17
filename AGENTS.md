@@ -3,6 +3,28 @@
 bureau maintains markdown notes in a git repository as a single synchronous
 binary, with everything it needs shipped inside it.
 
+## Product shape
+
+bureau is a thin CLI over plain markdown dossiers and a git repository, not a
+terminal application.
+
+- The markdown files are the primary interface. The user reads and edits them in
+  their own editor; bureau creates, records, lists and reports. It does not
+  browse, page or edit.
+- Git is the ledger. File names, relative links, headings and commit titles are
+  part of the record and must stay stable and traceable.
+- The terminal is transient. stdout carries data, stderr carries prompts and
+  warnings, plain output must be complete, and colour is only a redundant aid.
+  Never put information only in ANSI or in interactive state.
+- No closed garden: no required editor, plugin, shell or proprietary index.
+  Standard markdown, relative links and a repository must be enough to use every
+  dossier. Any editor integration is optional.
+- Do not build a TUI, dashboard, pager or file browser. The editor already does
+  that better; keep commands small and composable.
+- `tasks` and `report` are document views: plain, pipeable, LLM-friendly. `new`
+  and `worklog` are conversations: a prompt and a receipt, with light chrome
+  only.
+
 ## Validate every change
 
     cargo fmt --check
