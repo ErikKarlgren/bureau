@@ -3,7 +3,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use chrono::NaiveDate;
 
 use crate::cli::{Filter, TasksArgs};
 use crate::commands::files::Files;
@@ -13,9 +12,6 @@ use crate::commands::sources;
 use crate::git;
 use crate::style::{self, Palette};
 use crate::tasks::{Scope, Section, Tree};
-
-/// The date a daily entry is named after, as `YYYY-MM-DD`.
-const DATE_FORMAT: &str = "%Y-%m-%d";
 
 /// How a section announces itself.
 const SECTION_RULE: &str = "===";
@@ -262,7 +258,7 @@ fn read_entries(files: &mut Files, root: &Path) -> Result<Vec<Entry>> {
             continue;
         };
 
-        if NaiveDate::parse_from_str(&stem, DATE_FORMAT).is_err() {
+        if sources::date_of(&source.path).is_none() {
             continue;
         }
 

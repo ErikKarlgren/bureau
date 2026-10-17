@@ -418,7 +418,7 @@ mod tests {
     fn matching_only_looks_at_the_name() {
         let dossiers = vec![dossier("0007 - refactor.md")];
 
-        assert!(matching(&dossiers, "md").is_empty());
+        assert_eq!(matching(&dossiers, "md"), Vec::<std::path::PathBuf>::new());
     }
 
     #[test]
@@ -710,7 +710,10 @@ Words.
 
     #[test]
     fn a_worklog_less_dossier_has_no_days() {
-        assert!(worklog_days("# A dossier\n## Notes\n- nothing\n").is_empty());
+        assert_eq!(
+            worklog_days("# A dossier\n## Notes\n- nothing\n"),
+            Vec::new()
+        );
     }
 
     #[test]

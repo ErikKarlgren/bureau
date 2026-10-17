@@ -458,9 +458,9 @@ fn a_closed_fence_hides_a_task() {
 }
 
 #[test]
-fn a_trailing_dot_is_not_portable() {
+fn a_forbidden_character_is_not_portable() {
     let input = Input {
-        dossiers: vec![note("dossiers/a.", "## Worklog\n")],
+        dossiers: vec![note("dossiers/a:b.md", "## Worklog\n")],
         entries: Vec::new(),
     };
 

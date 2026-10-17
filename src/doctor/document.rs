@@ -51,8 +51,14 @@ impl Document {
     pub(super) fn exact_sections(&self, raw: &str) -> Vec<&Heading> {
         self.headings
             .iter()
-            .filter(|heading| heading.indent == 0 && heading.raw.trim_end() == raw)
+            .filter(|heading| is_exact_section(heading, raw))
             .collect()
+    }
+
+    pub(super) fn first_exact_section(&self, raw: &str) -> Option<&Heading> {
+        self.headings
+            .iter()
+            .find(|heading| is_exact_section(heading, raw))
     }
 
     pub(super) fn section_end(&self, heading: &Heading) -> usize {
@@ -94,6 +100,11 @@ impl Document {
     pub(super) const fn unclosed_fence(&self) -> Option<usize> {
         self.unclosed_fence
     }
+}
+
+/// Whether `heading` is exactly the section heading `raw`, at column zero.
+fn is_exact_section(heading: &Heading, raw: &str) -> bool {
+    heading.indent == 0 && heading.raw.trim_end() == raw
 }
 
 /// One ATX heading.

@@ -768,7 +768,7 @@ the rest of the crate.
 
 | File | Change |
 |---|---|
-| `src/doctor.rs` (new) | `Severity`, `Finding`, the shared note scanner (headings, fences, bullets, links), and one pure function per check. No filesystem, no printing. |
+| `src/doctor/` (new) | `Severity`, `Finding`, the shared note scanner (headings, fences, bullets, links), and one pure function per check. No filesystem, no printing. |
 | `src/commands/doctor.rs` (new) | Repository root, discovery, reading, invoking checks, rendering findings, deciding the exit code. The `run` / `run_in` split used by the other commands. |
 | `src/main.rs` | Use the `ExitCode` from `commands::run`; doctor findings must not go through the `Err` path. |
 | `src/cli.rs` | `Command::Doctor(DoctorArgs)`. v1 likely has no arguments; `--strict` can be added later. |
@@ -810,7 +810,7 @@ disagree about what a task is.
 
 ## 7. Tests
 
-The usual crate rules apply: pure logic in `src/doctor.rs`, IO at the edge, and
+The usual crate rules apply: pure logic in `src/doctor/`, IO at the edge, and
 a regression test for every finding that corresponds to a real bug or a real
 sample.
 

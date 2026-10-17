@@ -7,12 +7,6 @@ use crate::tasks::State;
 
 use super::{Check, Finding, Parsed, Severity};
 
-/// Windows device names that cannot be used as a file stem.
-const RESERVED_NAMES: [&str; 22] = [
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
-];
-
 /// Check the things that apply to every note.
 pub(super) fn check_note(note: &Parsed<'_>, findings: &mut Vec<Finding>) {
     check_name(note, findings);
@@ -33,13 +27,13 @@ fn check_name(note: &Parsed<'_>, findings: &mut Vec<Finding>) {
         return;
     };
 
-    if let Some(reason) = name_issue(name) {
+    if !crate::dossier::is_portable_filename(name) {
         findings.push(Finding::new(
             note.path,
             1,
             Severity::Warning,
             Check::Name,
-            format!("file name is not portable to Windows: {reason}"),
+            "file name is not portable to Windows",
         ));
     }
 }
@@ -122,7 +116,7 @@ fn check_tasks(note: &Parsed<'_>, findings: &mut Vec<Finding>) {
 }
 
 fn check_dash_task(note: &Parsed<'_>, bullet: &Bullet, findings: &mut Vec<Finding>) {
-    if let Some((state, text)) = task_marker(&bullet.text) {
+    if let Some((state, text)) = crate::tasks::task_marker(&bullet.text) {
         if text.trim().is_empty() {
             findings.push(Finding::new(
                 note.path,
@@ -180,52 +174,6 @@ pub(super) fn check_case_collisions<'a>(
             ));
         }
     }
-}
-
-/// A reason a file name is not portable to Windows.
-fn name_issue(name: &str) -> Option<&'static str> {
-    if name
-        .chars()
-        .any(|character| "<>:\"/\\|?*".contains(character))
-    {
-        return Some("it contains a character Windows forbids");
-    }
-    if name.chars().any(char::is_control) {
-        return Some("it contains a control character");
-    }
-    if name.ends_with('.') || name.ends_with(' ') {
-        return Some("it ends with a dot or a space");
-    }
-
-    let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
-    if RESERVED_NAMES.contains(&stem.as_str()) {
-        return Some("it is a reserved Windows device name");
-    }
-    if name.len() > 255 {
-        return Some("it is longer than 255 bytes");
-    }
-
-    None
-}
-
-fn task_marker(text: &str) -> Option<(State, &str)> {
-    let text = text.trim_start_matches(|character: char| character.is_ascii_whitespace());
-    let mut characters = text.chars();
-
-    if characters.next()? != '[' {
-        return None;
-    }
-    let state = State::from_symbol(characters.next()?)?;
-    if characters.next()? != ']' {
-        return None;
-    }
-
-    let after = text
-        .char_indices()
-        .nth(3)
-        .map_or("", |(offset, _)| text.get(offset..).unwrap_or(""));
-
-    Some((state, after))
 }
 
 /// Whether a bullet starts with a bracket shape a task marker could use.

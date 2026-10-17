@@ -15,9 +15,6 @@ use crate::report::{self, Changes, Dossier, Input};
 use crate::style::{self, Palette};
 use crate::worklog;
 
-/// How a daily entry is named.
-const DATE_FORMAT: &str = "%Y-%m-%d";
-
 /// One dossier's diff, as the command asks for it.
 ///
 /// The differ is handed one of these and returns the diff text, which is what
@@ -145,12 +142,7 @@ fn run_in(
     let mut entries = BTreeMap::new();
     if selected.is_none() {
         for source in sources::read_markdown(&mut files, root, ENTRIES_DIR)? {
-            let Some(date) = source
-                .path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .and_then(|stem| NaiveDate::parse_from_str(stem, DATE_FORMAT).ok())
-            else {
+            let Some(date) = sources::date_of(&source.path) else {
                 continue;
             };
 

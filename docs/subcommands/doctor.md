@@ -82,8 +82,10 @@ explicit and dry-run by default; doctor is read-only today.
 ### File-level
 
 - **Non-portable file name** (warning): a name Windows cannot check out
-  reliably: `< > : " / \ | ? *`, control characters, a trailing dot or space,
-  a reserved device name (`CON`, `NUL`, `COM1`, …), or a name over 255 bytes.
+  reliably: `< > : " / \ | ? *`, control characters, a reserved device name
+  (`CON`, `NUL`, `COM1`, …), or a name over 255 bytes. This is the same
+  `sanitise-file-name` rule set `bureau new` uses; `a..md` and names with
+  repeated spaces are valid and are not flagged.
 - **Case-insensitive collision** (warning): two names in one directory that
   differ only by case cannot coexist on a case-insensitive filesystem.
 - **Encoding and line endings** (warning): a UTF-8 BOM, CRLF line endings, a
@@ -161,7 +163,7 @@ warning instead of the first cross-link warning.
 
 | File | Contents |
 |---|---|
-| `src/doctor.rs` | public finding/input types, `check`, ordering, and the submodule wiring |
+| `src/doctor/mod.rs` | public finding/input types, `check`, ordering, and the submodule wiring |
 | `src/doctor/document.rs` | the line scanner: fences, headings, bullets, links and destinations |
 | `src/doctor/checks.rs` | names, encoding, fences, tasks and case collisions |
 | `src/doctor/links.rs` | broken relative links and dossier-link targets |

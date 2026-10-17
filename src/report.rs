@@ -725,8 +725,11 @@ mod tests {
         assert_eq!(days.len(), 1);
         assert_eq!(days.first().unwrap().date, first);
         assert!(days.first().unwrap().has_entry);
-        assert!(days.first().unwrap().entry.is_empty());
-        assert!(days.first().unwrap().dossiers.is_empty());
+        assert_eq!(days.first().unwrap().entry, Vec::<String>::new());
+        assert_eq!(
+            days.first().unwrap().dossiers,
+            Vec::<(String, Vec<String>)>::new()
+        );
         assert!(!has_work(&days));
     }
 
@@ -734,7 +737,7 @@ mod tests {
     fn a_worklog_heading_with_nothing_under_it_makes_no_day() {
         let built = input(vec![dossier("A", &[(date(2026, 9, 20), "")])], &[]);
 
-        assert!(days(&built).is_empty());
+        assert_eq!(days(&built).len(), 0);
     }
 
     #[test]
@@ -806,7 +809,7 @@ mod tests {
     fn a_period_with_no_notes_at_all_has_no_days() {
         let built = input(vec![dossier("A", &[])], &[]);
 
-        assert!(days(&built).is_empty());
+        assert_eq!(days(&built).len(), 0);
     }
 
     #[test]

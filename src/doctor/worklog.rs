@@ -159,8 +159,7 @@ fn check_worklog_backlinks(
         let Some(entry) = entries_by_date.get(date) else {
             continue;
         };
-        let sections = entry.note.document.exact_sections(LINKS_HEADING);
-        let Some(section) = sections.first() else {
+        let Some(section) = entry.note.document.first_exact_section(LINKS_HEADING) else {
             continue;
         };
 
@@ -179,7 +178,12 @@ fn check_worklog_backlinks(
 }
 
 pub(super) fn check_entry_section(entry: &ParsedEntry<'_>, findings: &mut Vec<Finding>) {
-    if entry.note.document.exact_sections(LINKS_HEADING).is_empty() {
+    if entry
+        .note
+        .document
+        .first_exact_section(LINKS_HEADING)
+        .is_none()
+    {
         findings.push(Finding::new(
             entry.note.path,
             1,
@@ -197,8 +201,7 @@ pub(super) fn check_entry_links(
     findings: &mut Vec<Finding>,
 ) {
     for entry in entries {
-        let sections = entry.note.document.exact_sections(LINKS_HEADING);
-        let Some(section) = sections.first() else {
+        let Some(section) = entry.note.document.first_exact_section(LINKS_HEADING) else {
             continue;
         };
         let end = entry.note.document.section_end(section);

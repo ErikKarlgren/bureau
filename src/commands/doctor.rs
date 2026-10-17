@@ -1,11 +1,10 @@
 //! `bureau doctor`.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 
-use anyhow::{Context, Result};
-use chrono::NaiveDate;
+use anyhow::Result;
 
 use crate::commands::files::Files;
 use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
@@ -13,9 +12,6 @@ use crate::commands::sources;
 use crate::doctor::{self, EntryNote, Input, Note};
 use crate::git;
 use crate::style::{self, Palette};
-
-/// How a daily entry is named.
-const DATE_FORMAT: &str = "%Y-%m-%d";
 
 /// Check the notes for formatting problems.
 ///
@@ -60,7 +56,7 @@ fn read_input(
     findings: &mut Vec<doctor::Finding>,
 ) -> Result<Input> {
     let mut dossiers = Vec::new();
-    for path in note_paths(root, DOSSIERS_DIR)? {
+    for path in sources::markdown_paths(root, DOSSIERS_DIR)? {
         match files.read(&path) {
             Ok(contents) => {
                 // Sealing is not implemented yet; when it is, doctor should
@@ -79,8 +75,8 @@ fn read_input(
     }
 
     let mut entries = Vec::new();
-    for path in note_paths(root, ENTRIES_DIR)? {
-        let Some(date) = date_of(&path) else {
+    for path in sources::markdown_paths(root, ENTRIES_DIR)? {
+        let Some(date) = sources::date_of(&path) else {
             continue;
         };
 
@@ -95,39 +91,6 @@ fn read_input(
     }
 
     Ok(Input { dossiers, entries })
-}
-
-/// The `.md` files in one notes directory, sorted by name.
-fn note_paths(root: &Path, directory: &str) -> Result<Vec<PathBuf>> {
-    let directory = root.join(directory);
-    let entries = match fs::read_dir(&directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("could not read '{}'", directory.display()));
-        }
-    };
-
-    let mut paths = Vec::new();
-    for entry in entries {
-        let path = entry
-            .with_context(|| format!("could not read '{}'", directory.display()))?
-            .path();
-
-        if path.extension().is_some_and(|extension| extension == "md") {
-            paths.push(path);
-        }
-    }
-
-    paths.sort();
-    Ok(paths)
-}
-
-/// The date an entry file is named after.
-fn date_of(path: &Path) -> Option<NaiveDate> {
-    path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .and_then(|stem| NaiveDate::parse_from_str(stem, DATE_FORMAT).ok())
 }
 
 /// Render findings as `path:line: Severity: message`, then a summary.
