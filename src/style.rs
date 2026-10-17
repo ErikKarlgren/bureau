@@ -1,5 +1,5 @@
-//! Colour for `bureau tasks`, `bureau report` and the paths `bureau new`
-//! prints.
+//! Colour for `bureau tasks`, `bureau report`, `bureau new` and
+//! `bureau worklog`.
 //!
 //! The rules for a listing and a report are in `docs/subcommands/tasks.md` and
 //! `docs/subcommands/report.md`; the whole of the implementation is the table
@@ -8,6 +8,7 @@
 //! nothing but the aid to scanning.
 
 use std::env;
+use std::fmt;
 use std::io::IsTerminal;
 
 use crate::tasks::{Section, State};
@@ -26,11 +27,19 @@ impl Style {
     /// `text` in this style.
     #[must_use]
     pub fn paint(self, text: &str) -> String {
+        self.paint_args(format_args!("{text}"))
+    }
+
+    /// Formatting arguments in this style, with one allocation.
+    ///
+    /// The caller passes `format_args!` so a formatted message is not built
+    /// once to be prefixed and again to be painted.
+    fn paint_args(self, args: fmt::Arguments<'_>) -> String {
         if self.open.is_empty() {
-            return text.to_owned();
+            return args.to_string();
         }
 
-        format!("{}{text}{RESET}", self.open)
+        format!("{}{args}{RESET}", self.open)
     }
 }
 
@@ -55,6 +64,7 @@ const BOLD_CYAN: Style = Style { open: "\x1b[1;36m" };
 const BOLD_MAGENTA: Style = Style { open: "\x1b[1;35m" };
 const BOLD_GREEN: Style = Style { open: "\x1b[1;32m" };
 const BOLD_YELLOW: Style = Style { open: "\x1b[1;33m" };
+const BOLD_RED: Style = Style { open: "\x1b[1;31m" };
 
 /// The colours a run draws with.
 ///
@@ -79,6 +89,8 @@ pub struct Palette {
     context_style: Style,
     /// A warning, which goes to stderr rather than into the report.
     warning_style: Style,
+    /// An error, which goes to stderr and ends the command.
+    error_style: Style,
     /// The report's own structure, which `tasks` never asks for: its title, its
     /// `##` headings (a day, the diff section), its `###` dossier headings, and
     /// the scaffolding around a diff (its fold markers and its backtick fence).
@@ -102,6 +114,7 @@ impl Palette {
         path_style: Style::NONE,
         context_style: Style::NONE,
         warning_style: Style::NONE,
+        error_style: Style::NONE,
         title_style: Style::NONE,
         subheading_style: Style::NONE,
         dossier_style: Style::NONE,
@@ -112,7 +125,8 @@ impl Palette {
     /// for what is waiting on somebody else, green for what is over. The report
     /// draws structure instead of state: a bold magenta title, bold cyan `##`
     /// headings, bold blue dossier headings, and dim scaffolding around a diff.
-    /// `bureau new` draws a plain sentence whose path is cyan.
+    /// `bureau new` and `bureau worklog` draw a plain conversation whose values
+    /// are cyan; warnings are yellow and errors are red.
     pub const ON: Self = Self {
         actionable: BOLD_BLUE,
         blocked: BOLD_MAGENTA,
@@ -125,6 +139,7 @@ impl Palette {
         path_style: CYAN,
         context_style: DIM,
         warning_style: BOLD_YELLOW,
+        error_style: BOLD_RED,
         title_style: BOLD_MAGENTA,
         subheading_style: BOLD_CYAN,
         dossier_style: BOLD_BLUE,
@@ -235,6 +250,28 @@ impl Palette {
     #[must_use]
     pub const fn warning(self) -> Style {
         self.warning_style
+    }
+
+    /// The style an error is drawn in: red, on stderr, after the command failed.
+    #[must_use]
+    pub const fn error(self) -> Style {
+        self.error_style
+    }
+
+    /// A complete warning line: the `Warning:` prefix and the message painted.
+    ///
+    /// Callers pass only the message, as a literal or as `format_args!`; the
+    /// capitalisation and the paint live in one place.
+    #[must_use]
+    pub fn warning_line(self, message: impl fmt::Display) -> String {
+        self.warning()
+            .paint_args(format_args!("Warning: {message}"))
+    }
+
+    /// A complete error line: the `Error:` prefix and the message painted.
+    #[must_use]
+    pub fn error_line(self, message: impl fmt::Display) -> String {
+        self.error().paint_args(format_args!("Error: {message}"))
     }
 }
 
@@ -356,6 +393,8 @@ mod tests {
             palette.heading(),
             palette.path(),
             palette.context(),
+            palette.warning(),
+            palette.error(),
             palette.title(),
             palette.subheading(),
             palette.dossier(),
@@ -403,6 +442,8 @@ mod tests {
             "entries/2026-09-20.md"
         );
         assert_eq!(palette.context().paint("- [x] context"), "- [x] context");
+        assert_eq!(palette.warning_line("x"), "Warning: x");
+        assert_eq!(palette.error_line("x"), "Error: x");
         assert_eq!(
             palette.title().paint("# Report for 2026-09-20"),
             "# Report for 2026-09-20"
@@ -445,12 +486,15 @@ mod tests {
     }
 
     #[test]
-    fn a_warning_is_yellow_while_the_report_never_is() {
+    fn a_warning_is_yellow_and_an_error_is_red() {
+        assert_eq!(Palette::ON.warning_line("x"), "\x1b[1;33mWarning: x\x1b[0m");
+        assert_eq!(Palette::OFF.warning_line("x"), "Warning: x");
         assert_eq!(
-            Palette::ON.warning().paint("warning: x"),
-            "\x1b[1;33mwarning: x\x1b[0m"
+            Palette::ON.warning_line(format_args!("x{}", 1)),
+            "\x1b[1;33mWarning: x1\x1b[0m"
         );
-        assert_eq!(Palette::OFF.warning().paint("warning: x"), "warning: x");
+        assert_eq!(Palette::ON.error_line("x"), "\x1b[1;31mError: x\x1b[0m");
+        assert_eq!(Palette::OFF.error_line("x"), "Error: x");
     }
 
     #[test]

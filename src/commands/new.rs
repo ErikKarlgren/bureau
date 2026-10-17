@@ -285,8 +285,14 @@ fn write_and_commit(
     fs::write(path, contents).with_context(|| format!("could not write '{shown}'"))?;
 
     if let Err(error) = git::commit(root, &[path], &git::commit_title(action, path)) {
-        eprintln!("warning: {error:?}");
-        eprintln!("warning: the {kind} was created at '{shown}' but is not committed");
+        let warning = style::for_stderr();
+        eprintln!("{}", warning.warning_line(format_args!("{error:?}")));
+        eprintln!(
+            "{}",
+            warning.warning_line(format_args!(
+                "the {kind} was created at '{shown}' but is not committed"
+            ))
+        );
     }
 
     Ok(())

@@ -171,8 +171,8 @@ fn preview_dossier(
         writeln!(
             err,
             "{}",
-            colours.warning_palette.warning().paint(&format!(
-                "warning: there are no uncommitted changes to '{chosen_shown}'"
+            colours.warning_palette.warning_line(format_args!(
+                "there are no uncommitted changes to '{chosen_shown}'"
             ))
         )?;
     }
@@ -290,14 +290,13 @@ fn commit_worklog(
                 "{}",
                 colours
                     .warning_palette
-                    .warning()
-                    .paint(&format!("warning: {error:#}"))
+                    .warning_line(format_args!("{error:#}"))
             )?;
             writeln!(
                 err,
                 "{}",
-                colours.warning_palette.warning().paint(&format!(
-                    "warning: the worklog was written to '{chosen_shown}' but is not committed"
+                colours.warning_palette.warning_line(format_args!(
+                    "the worklog was written to '{chosen_shown}' but is not committed"
                 ))
             )?;
 
@@ -329,9 +328,9 @@ fn print_summary(
                 writeln!(
                     err,
                     "{}",
-                    colours.warning_palette.warning().paint(&format!(
-                        "warning: could not summarize the commits: {error:#}"
-                    ))
+                    colours
+                        .warning_palette
+                        .warning_line(format_args!("could not summarize the commits: {error:#}"))
                 )?;
                 return Ok(());
             }
@@ -359,9 +358,9 @@ fn print_summary(
             writeln!(
                 err,
                 "{}",
-                colours.warning_palette.warning().paint(&format!(
-                    "warning: could not summarize the commits: {error:#}"
-                ))
+                colours
+                    .warning_palette
+                    .warning_line(format_args!("could not summarize the commits: {error:#}"))
             )?;
         }
     }
@@ -617,7 +616,7 @@ mod tests {
         );
         assert!(
             err.contains(
-                "warning: there are no uncommitted changes to 'dossiers/0007 - legacy.md'"
+                "Warning: there are no uncommitted changes to 'dossiers/0007 - legacy.md'"
             ),
             "{err}"
         );
@@ -688,7 +687,7 @@ mod tests {
         assert!(!out.contains("(new entry)"), "{out}");
         assert!(
             err.contains(
-                "warning: there are no uncommitted changes to 'dossiers/0007 - legacy.md'"
+                "Warning: there are no uncommitted changes to 'dossiers/0007 - legacy.md'"
             ),
             "{err}"
         );
@@ -810,7 +809,7 @@ mod tests {
         );
         assert!(
             err.contains(
-                "warning: there are no uncommitted changes to 'dossiers/0007 - legacy.md'"
+                "Warning: there are no uncommitted changes to 'dossiers/0007 - legacy.md'"
             ),
             "{err}"
         );
@@ -881,7 +880,7 @@ mod tests {
 
         assert!(
             err.contains(
-                "warning: there are no uncommitted changes to 'dossiers/0007 - legacy.md'"
+                "Warning: there are no uncommitted changes to 'dossiers/0007 - legacy.md'"
             ),
             "{err}"
         );
@@ -903,7 +902,7 @@ mod tests {
 
         assert!(
             err.contains(
-                "warning: there are no uncommitted changes to 'dossiers/0007 - legacy.md'"
+                "Warning: there are no uncommitted changes to 'dossiers/0007 - legacy.md'"
             ),
             "{err}"
         );

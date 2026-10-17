@@ -76,9 +76,9 @@ pub fn run(args: &ReportArgs) -> Result<()> {
 
     let (output, warnings) = run_in(&root, args, palette, today, &differ, selection::pick)?;
 
-    let warning_style = style::for_stderr().warning();
+    let warning_palette = style::for_stderr();
     for warning in &warnings {
-        eprintln!("{}", warning_style.paint(&format!("warning: {warning}")));
+        eprintln!("{}", warning_palette.warning_line(warning));
     }
 
     print!("{output}");
