@@ -1,5 +1,6 @@
 //! `bureau worklog`.
 
+use std::fmt;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -7,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail};
 use chrono::{Local, NaiveDate};
 use dialoguer::Input;
+use dialoguer::theme::Theme;
 
 use crate::Result;
 use crate::cli::WorklogArgs;
@@ -22,6 +24,50 @@ use crate::worklog;
 struct Colours {
     palette: Palette,
     warning_palette: Palette,
+}
+
+/// The label and hint of the message prompt.
+const MESSAGE_PROMPT: &str = "Message";
+const MESSAGE_HINT: &str = "(Ctrl-C to cancel)";
+
+/// The prompt line: a bold label and a dim hint, with the colon left plain.
+///
+/// `dialoguer` measures text width with the ANSI sequences ignored, so styling
+/// the prompt does not disturb its wrapping.
+fn message_prompt(palette: Palette, label: &str) -> String {
+    format!(
+        "{} {}: ",
+        palette.heading().paint(label),
+        palette.context().paint(MESSAGE_HINT)
+    )
+}
+
+/// The `dialoguer` theme that renders [`message_prompt`].
+struct WorklogTheme {
+    palette: Palette,
+}
+
+impl Theme for WorklogTheme {
+    fn format_input_prompt(
+        &self,
+        f: &mut dyn fmt::Write,
+        prompt: &str,
+        _default: Option<&str>,
+    ) -> fmt::Result {
+        f.write_str(&message_prompt(self.palette, prompt))
+    }
+
+    fn format_input_prompt_selection(
+        &self,
+        f: &mut dyn fmt::Write,
+        prompt: &str,
+        selection: &str,
+    ) -> fmt::Result {
+        f.write_str(&format!(
+            "{}{selection}",
+            message_prompt(self.palette, prompt)
+        ))
+    }
 }
 
 /// Log one line of work against a dossier, and link it from that day's entry.
@@ -159,7 +205,12 @@ fn preview_dossier(
 ) -> Result<()> {
     if git::has_changes(root, dossier)? {
         let diff = git::diff_worktree(root, dossier, colours.palette == Palette::ON)?;
+        writeln!(out, "{}", colours.palette.scaffold().paint("{{{ git diff"))?;
         write!(out, "{diff}")?;
+        if !diff.ends_with('\n') {
+            writeln!(out)?;
+        }
+        writeln!(out, "{}", colours.palette.scaffold().paint("}}}"))?;
         writeln!(out)?;
     } else {
         writeln!(
@@ -195,7 +246,12 @@ fn commit_entry(
             &git::commit_title("update entry", entry_path),
         )
         .with_context(|| format!("could not commit the existing changes to '{entry_shown}'"))?;
-        writeln!(out, "Updated entry {}", colours.palette.quoted(entry_shown))?;
+        writeln!(
+            out,
+            "{} {}",
+            colours.palette.heading().paint("Updated entry"),
+            colours.palette.quoted(entry_shown)
+        )?;
 
         return Ok(true);
     }
@@ -215,7 +271,12 @@ fn commit_entry(
         &git::commit_title("new entry", entry_path),
     )
     .with_context(|| format!("could not commit the new entry '{entry_shown}'"))?;
-    writeln!(out, "Created entry {}", colours.palette.quoted(entry_shown))?;
+    writeln!(
+        out,
+        "{} {}",
+        colours.palette.heading().paint("Created entry"),
+        colours.palette.quoted(entry_shown)
+    )?;
 
     Ok(true)
 }
@@ -243,13 +304,24 @@ fn commit_worklog(
         &git::commit_title("worklog", dossier),
     ) {
         Ok(()) => {
-            writeln!(out, "Logged to {}", colours.palette.quoted(&chosen_shown))?;
+            writeln!(
+                out,
+                "{} {}",
+                colours.palette.heading().paint("Logged to"),
+                colours.palette.quoted(&chosen_shown)
+            )?;
             if linked {
-                writeln!(out, "Linked entry {}", colours.palette.quoted(&entry_shown))?;
+                writeln!(
+                    out,
+                    "{} {}",
+                    colours.palette.heading().paint("Linked entry"),
+                    colours.palette.quoted(&entry_shown)
+                )?;
             } else {
                 writeln!(
                     out,
-                    "Entry {} already links to it",
+                    "{} {} already links to it",
+                    colours.palette.heading().paint("Entry"),
                     colours.palette.quoted(&entry_shown)
                 )?;
             }
@@ -319,6 +391,7 @@ fn print_summary(
     ) {
         Ok(summary) if !summary.trim().is_empty() => {
             writeln!(out)?;
+            writeln!(out, "{}", colours.palette.heading().paint("Summary"))?;
             write!(out, "{summary}")?;
             if !summary.ends_with('\n') {
                 writeln!(out)?;
@@ -372,16 +445,19 @@ fn select(dossiers: &[PathBuf], args: &WorklogArgs) -> Result<PathBuf> {
 /// error is not a terminal, there is no editor to draw, so the plain line read
 /// is used and a piped message still works.
 fn prompt_for_message() -> Result<String> {
+    let palette = style::for_stderr();
+
     if io::stdin().is_terminal() && io::stderr().is_terminal() {
-        let message = Input::<String>::new()
-            .with_prompt("Message (Ctrl-C to cancel)")
+        let theme = WorklogTheme { palette };
+        let message = Input::<String>::with_theme(&theme)
+            .with_prompt(MESSAGE_PROMPT)
             .interact_text()
             .context("could not read the message")?;
 
         return checked(message);
     }
 
-    eprint!("Message (Ctrl-C to cancel): ");
+    eprint!("{}", message_prompt(palette, MESSAGE_PROMPT));
     io::stderr().flush()?;
 
     let mut message = String::new();
@@ -449,6 +525,18 @@ mod tests {
             palette: Palette::OFF,
             warning_palette: Palette::OFF,
         }
+    }
+
+    #[test]
+    fn the_prompt_bolds_the_label_and_dims_the_hint() {
+        assert_eq!(
+            message_prompt(Palette::ON, "Message"),
+            "\x1b[1mMessage\x1b[0m \x1b[2m(Ctrl-C to cancel)\x1b[0m: "
+        );
+        assert_eq!(
+            message_prompt(Palette::OFF, "Message"),
+            "Message (Ctrl-C to cancel): "
+        );
     }
 
     /// Run the command with the plain palette and capture both streams.
@@ -590,6 +678,14 @@ mod tests {
         assert!(
             out.contains("entries/2026-03-23.md (new)"),
             "the new entry is not in the summary: {out}"
+        );
+        assert!(
+            out.contains("\n\nSummary\n"),
+            "the Summary label is missing: {out}"
+        );
+        assert!(
+            out.find("Summary") < out.find("changed,"),
+            "the Summary label is after the stats: {out}"
         );
         assert!(
             out.trim_end()
@@ -813,11 +909,13 @@ mod tests {
         })
         .unwrap();
 
-        let diff = out.find("diff --git a/dossiers/0007 - legacy.md");
-        let logging = out.find("Logging to");
-        assert!(diff.is_some(), "no preview: {out}");
-        assert!(logging.is_some(), "no logging line: {out}");
-        assert!(diff < logging, "the preview is not first: {out}");
+        let open = out.find("{{{ git diff").unwrap();
+        let diff = out.find("diff --git a/dossiers/0007 - legacy.md").unwrap();
+        let close = out.find("}}}").unwrap();
+        let logging = out.find("Logging to").unwrap();
+        assert!(open < diff, "the preview is not inside its frame: {out}");
+        assert!(diff < close, "the preview is not inside its frame: {out}");
+        assert!(close < logging, "the frame does not end the preview: {out}");
         assert!(out.contains("+- manual"), "{out}");
         assert!(err.is_empty(), "{err}");
         assert_eq!(
@@ -842,6 +940,7 @@ mod tests {
             "{err}"
         );
         assert!(!out.contains("diff --git"), "{out}");
+        assert!(!out.contains("{{{ git diff"), "{out}");
         assert!(out.contains("Logging to"), "{out}");
     }
 
