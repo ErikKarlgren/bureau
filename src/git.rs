@@ -31,14 +31,18 @@ pub fn toplevel() -> Result<PathBuf> {
 
 /// Stage and commit the given files, leaving any other staged changes alone.
 ///
+/// `root` is the repository root the paths belong to; git is run there so an
+/// absolute path in `paths` is inside the repository git sees.
+///
 /// # Errors
 ///
 /// Fails when `git add` or `git commit` exits with an error. The message
 /// carries git's own explanation.
-pub fn commit(paths: &[&Path], message: &str) -> Result<()> {
+pub fn commit(root: &Path, paths: &[&Path], message: &str) -> Result<()> {
     let added = Command::new("git")
         .arg("add")
         .args(paths)
+        .current_dir(root)
         .output()
         .context("could not run git")?;
     if !added.status.success() {
@@ -48,6 +52,7 @@ pub fn commit(paths: &[&Path], message: &str) -> Result<()> {
     let committed = Command::new("git")
         .args(["commit", "--only", "-m", message])
         .args(paths)
+        .current_dir(root)
         .output()
         .context("could not run git")?;
     if !committed.status.success() {
@@ -55,6 +60,20 @@ pub fn commit(paths: &[&Path], message: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The title of a commit about one file: `<action>: <file stem>`.
+///
+/// The directory and the `.md` extension are left out, so a dossier titled
+/// `dossiers/1234 - foo.md` is committed as `new dossier: 1234 - foo` or
+/// `worklog: 1234 - foo`.
+#[must_use]
+pub fn commit_title(action: &str, path: &Path) -> String {
+    let stem = path
+        .file_stem()
+        .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
+
+    format!("{action}: {stem}")
 }
 
 /// Whatever git had to say for itself, for use in an error message.
@@ -98,22 +117,85 @@ pub fn relative<'a>(root: &Path, path: &'a Path) -> &'a Path {
     path.strip_prefix(root).unwrap_or(path)
 }
 
-/// Whether the repository has a commit to compare against.
+/// The commit `HEAD` points at, or `None` when the repository has no commits.
 ///
-/// An unborn `HEAD` is not an error: a fresh repository simply has no history,
-/// and a report over it has no diffs.
+/// An unborn `HEAD` is not an error: a fresh repository simply has no history.
 ///
 /// # Errors
 ///
-/// Fails when `git` cannot be run.
-pub fn has_head(root: &Path) -> Result<bool> {
+/// Fails when `git` cannot be run, or when it fails for a reason other than an
+/// unborn `HEAD`.
+pub fn head(root: &Path) -> Result<Option<String>> {
     let output = Command::new("git")
         .args(["rev-parse", "--verify", "--quiet", "HEAD"])
         .current_dir(root)
         .output()
         .context("could not run git")?;
 
-    Ok(output.status.success())
+    match output.status.code() {
+        Some(0) => Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        )),
+        Some(1) => Ok(None),
+        _ => bail!("git rev-parse failed: {}", stderr(&output)),
+    }
+}
+
+/// Whether the repository has a commit to compare against.
+///
+/// # Errors
+///
+/// Fails when `git` cannot be run.
+pub fn has_head(root: &Path) -> Result<bool> {
+    Ok(head(root)?.is_some())
+}
+
+/// Whether `path` has uncommitted changes that git can see against `HEAD`.
+///
+/// This looks at tracked content only: an untracked path has no diff against
+/// `HEAD`, which is the question a preview of a dossier's changes asks.
+///
+/// # Errors
+///
+/// Fails when `git` cannot be run, or when the diff cannot be produced.
+pub fn has_changes(root: &Path, path: &Path) -> Result<bool> {
+    if !has_head(root)? {
+        return Ok(false);
+    }
+
+    let mut command = pinned_diff(root);
+    command.args(["--quiet", "HEAD", "--"]).arg(path);
+
+    let output = command.output().context("could not run git")?;
+
+    match output.status.code() {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => bail!("git diff failed: {}", stderr(&output)),
+    }
+}
+
+/// Whether `path` has any uncommitted change, an untracked file included.
+///
+/// What `bureau worklog` asks before deciding whether an existing entry needs
+/// its own `update entry` commit.
+///
+/// # Errors
+///
+/// Fails when `git` cannot be run, or when the status cannot be read.
+pub fn is_dirty(root: &Path, path: &Path) -> Result<bool> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=all", "--"])
+        .arg(path)
+        .current_dir(root)
+        .output()
+        .context("could not run git")?;
+
+    if !output.status.success() {
+        bail!("git status failed: {}", stderr(&output));
+    }
+
+    Ok(!output.stdout.is_empty())
 }
 
 /// The newest commit touching each path strictly before `date`.
@@ -244,6 +326,28 @@ pub fn empty_tree(root: &Path) -> Result<String> {
     Ok(hash.trim().to_owned())
 }
 
+/// A `git diff` command with the settings pinned, ready for the caller's own
+/// flags and revisions.
+///
+/// Every diff bureau prints goes through this, so a user's `diff.external`, a
+/// `textconv`, or a `color.diff.*` setting cannot change the bytes.
+fn pinned_diff(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.arg("--no-pager").current_dir(root);
+
+    for setting in PINNED {
+        command.args(["-c", setting]);
+    }
+
+    command
+        .args(["diff", "--no-ext-diff", "--no-textconv", "--no-color-moved"])
+        .env_remove("GIT_EXTERNAL_DIFF")
+        .env_remove("GIT_DIFF_OPTS");
+
+    clear_injected_config(&mut command);
+    command
+}
+
 /// The diffs of many paths between the same two trees, in one `git diff`.
 ///
 /// A `base` of `None` is the empty tree, which is what a dossier created inside
@@ -278,16 +382,8 @@ where
 {
     let paths: Vec<&Path> = paths.into_iter().collect();
 
-    let mut command = Command::new("git");
-    command.arg("--no-pager").current_dir(root);
-
-    for setting in PINNED {
-        command.args(["-c", setting]);
-    }
-
+    let mut command = pinned_diff(root);
     command
-        .arg("diff")
-        .args(["--no-ext-diff", "--no-textconv", "--no-color-moved"])
         .arg(if color {
             "--color=always"
         } else {
@@ -295,15 +391,11 @@ where
         })
         .args(["--line-prefix", FILE_MARKER]);
 
-    clear_injected_config(&mut command);
-
     let output = command
         .arg(base.unwrap_or(EMPTY_TREE))
         .arg(head)
         .arg("--")
         .args(&paths)
-        .env_remove("GIT_EXTERNAL_DIFF")
-        .env_remove("GIT_DIFF_OPTS")
         .output()
         .context("could not run git")?;
 
@@ -322,6 +414,73 @@ where
     }
 
     Ok(diffs)
+}
+
+/// One path's uncommitted changes against `HEAD`.
+///
+/// This is the full diff `bureau worklog` shows before it asks for the message;
+/// an untracked path has no such diff, which is why the caller asks
+/// [`has_changes`] first.
+///
+/// # Errors
+///
+/// Fails when `git` cannot be run or the diff cannot be produced.
+pub fn diff_worktree(root: &Path, path: &Path, color: bool) -> Result<String> {
+    let mut command = pinned_diff(root);
+    command.arg(if color {
+        "--color=always"
+    } else {
+        "--no-color"
+    });
+
+    let output = command
+        .arg("HEAD")
+        .arg("--")
+        .arg(path)
+        .output()
+        .context("could not run git")?;
+
+    if !output.status.success() {
+        bail!("git diff failed: {}", stderr(&output));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The compact summary of the changes between `base` and `HEAD`.
+///
+/// Used for the receipt `bureau worklog` prints after the commits it made. The
+/// pathspec keeps the summary to the files the command touched, and `base` is
+/// the commit the run started from (or the empty tree, for a repository whose
+/// first commit was made by the run).
+///
+/// # Errors
+///
+/// Fails when `git` cannot be run or the summary cannot be produced.
+pub fn summary<'p, I>(root: &Path, base: &str, paths: I, color: bool) -> Result<String>
+where
+    I: IntoIterator<Item = &'p Path>,
+{
+    let mut command = pinned_diff(root);
+    command
+        .arg(if color {
+            "--color=always"
+        } else {
+            "--no-color"
+        })
+        .arg("--compact-summary")
+        .arg(base)
+        .arg("HEAD")
+        .arg("--")
+        .args(paths);
+
+    let output = command.output().context("could not run git")?;
+
+    if !output.status.success() {
+        bail!("git diff failed: {}", stderr(&output));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// The marker that starts each file's diff in the batched output.
@@ -576,11 +735,32 @@ mod tests {
     }
 
     #[test]
+    fn a_commit_title_names_the_file_without_its_directory_or_extension() {
+        assert_eq!(
+            commit_title("new dossier", Path::new("dossiers/1234 - fewafw.md")),
+            "new dossier: 1234 - fewafw"
+        );
+        assert_eq!(
+            commit_title("new entry", Path::new("entries/2026-10-17.md")),
+            "new entry: 2026-10-17"
+        );
+        assert_eq!(
+            commit_title("update entry", Path::new("entries/2026-10-17.md")),
+            "update entry: 2026-10-17"
+        );
+        assert_eq!(
+            commit_title("worklog", Path::new("dossiers/v10.1.23 - docs.md")),
+            "worklog: v10.1.23 - docs"
+        );
+    }
+
+    #[test]
     fn history_helpers_read_the_repository() {
         let scratch = repository("git-history");
         let root = scratch.path();
 
         assert!(has_head(root).unwrap());
+        assert!(head(root).unwrap().is_some());
         assert_eq!(
             empty_tree(root).unwrap(),
             "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
@@ -589,6 +769,34 @@ mod tests {
         let unborn = Scratch::new("git-unborn").unwrap();
         git(unborn.path(), &["init", "-q"]);
         assert!(!has_head(unborn.path()).unwrap());
+        assert!(head(unborn.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn worktree_changes_are_detected_and_summarized() {
+        let scratch = repository("git-worktree");
+        let root = scratch.path();
+        let path = Path::new("f.md");
+
+        assert!(!has_changes(root, path).unwrap());
+        assert!(!is_dirty(root, path).unwrap());
+
+        scratch.write("f.md", "one\nTWO\nTHREE\n").unwrap();
+
+        assert!(has_changes(root, path).unwrap());
+        assert!(is_dirty(root, path).unwrap());
+        let diff = diff_worktree(root, path, false).unwrap();
+        assert!(diff.contains("+THREE"), "{diff}");
+
+        // An untracked file is dirty, but has no diff against HEAD.
+        let untracked = Path::new("new.md");
+        scratch.write("new.md", "new\n").unwrap();
+        assert!(is_dirty(root, untracked).unwrap());
+        assert!(!has_changes(root, untracked).unwrap());
+
+        let summary = summary(root, "HEAD~1", [path], false).unwrap();
+        assert!(summary.contains("f.md"), "{summary}");
+        assert!(summary.contains("1 file changed"), "{summary}");
     }
 
     #[test]

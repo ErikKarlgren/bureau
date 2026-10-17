@@ -186,6 +186,15 @@ impl Palette {
         self.path_style
     }
 
+    /// `value` between single quotes, with the value painted as a path.
+    ///
+    /// The quotes stay plain: a copy of the line pastes the value, not the
+    /// escape sequences around it.
+    #[must_use]
+    pub fn quoted(self, value: &str) -> String {
+        format!("'{}'", self.path().paint(value))
+    }
+
     /// The style the report's title is drawn in.
     #[must_use]
     pub const fn title(self) -> Style {
@@ -451,6 +460,18 @@ mod tests {
         assert_eq!(
             Palette::ON.path().paint("entries/2026-09-20.md"),
             "\x1b[36mentries/2026-09-20.md\x1b[0m"
+        );
+    }
+
+    #[test]
+    fn a_quoted_value_paints_only_the_value() {
+        assert_eq!(
+            Palette::ON.quoted("entries/2026-09-20.md"),
+            "'\x1b[36mentries/2026-09-20.md\x1b[0m'"
+        );
+        assert_eq!(
+            Palette::OFF.quoted("entries/2026-09-20.md"),
+            "'entries/2026-09-20.md'"
         );
     }
 }

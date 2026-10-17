@@ -53,11 +53,12 @@ pub fn entry() -> Result<()> {
 
     println!("{}", created(&shown, style::for_stdout()));
     write_and_commit(
+        &root,
         &path,
         &shown,
         &template::daily_entry(&date),
         "entry",
-        &format!("New entry {date}"),
+        "new entry",
     )
 }
 
@@ -95,13 +96,7 @@ fn run_in(
     );
 
     println!("{}", created(&shown, palette));
-    write_and_commit(
-        &path,
-        &shown,
-        &contents,
-        "dossier",
-        &format!("New dossier {name}"),
-    )
+    write_and_commit(root, &path, &shown, &contents, "dossier", "new dossier")
 }
 
 /// The current date and time, as `bureau new dossier` writes it into the
@@ -159,14 +154,17 @@ fn read_link(answers: &mut impl BufRead) -> Result<String> {
 /// Write a new file, creating its directory, then commit it.
 ///
 /// A git failure is only a warning: the file on disk is useful either way.
-/// `shown` is the name of the file relative to the working directory, which is
-/// what every message says it by.
+/// `root` is the repository root the path belongs to. `shown` is the name of
+/// the file relative to the working directory, which is what every message says
+/// it by. `action` is the first half of the commit title, so the file's own
+/// name is taken from `path`.
 fn write_and_commit(
+    root: &Path,
     path: &Path,
     shown: &str,
     contents: &str,
     kind: &str,
-    message: &str,
+    action: &str,
 ) -> Result<()> {
     if let Some(directory) = path.parent() {
         fs::create_dir_all(directory)
@@ -175,7 +173,7 @@ fn write_and_commit(
 
     fs::write(path, contents).with_context(|| format!("could not write '{shown}'"))?;
 
-    if let Err(error) = git::commit(&[path], message) {
+    if let Err(error) = git::commit(root, &[path], &git::commit_title(action, path)) {
         eprintln!("warning: {error:?}");
         eprintln!("warning: the {kind} was created at '{shown}' but is not committed");
     }
@@ -186,7 +184,7 @@ fn write_and_commit(
 /// What to print once the file is on disk: the one line a person wants after
 /// asking for a file, with its name painted.
 fn created(shown: &str, palette: Palette) -> String {
-    format!("Created '{}'", palette.path().paint(shown))
+    format!("Created {}", palette.quoted(shown))
 }
 
 /// The name to print for `path`: how to walk to it from `base`, the current
@@ -384,6 +382,28 @@ mod tests {
         let written = scratch.read("dossiers/5678 - quiet.md").unwrap();
         assert!(written.contains("Nothing to link to."), "{written:?}");
         assert!(!written.contains("[Link to task]"), "{written:?}");
+    }
+
+    #[test]
+    fn a_new_dossier_commit_is_titled_after_its_file() {
+        let scratch = Scratch::new("new-dossier-commit").unwrap();
+        scratch.init_git();
+        let answers = Cursor::new("A dossier about the font.\n.\n\n");
+
+        let base = base(&scratch);
+        run_in(
+            scratch.path(),
+            Some(&base),
+            &args("1234 - fewafw"),
+            Palette::OFF,
+            answers,
+        )
+        .unwrap();
+
+        assert_eq!(
+            scratch.git_output(&["log", "--format=%s"]).trim(),
+            "new dossier: 1234 - fewafw"
+        );
     }
 
     #[test]
