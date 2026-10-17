@@ -10,6 +10,7 @@ use dialoguer::Input;
 
 use crate::Result;
 use crate::cli::WorklogArgs;
+use crate::commands::files::Files;
 use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
 use crate::commands::{selection, sources};
 use crate::git;
@@ -65,15 +66,15 @@ fn run_in(
     err: &mut impl Write,
 ) -> Result<()> {
     let date = target_date(args.date.as_deref())?;
-    let dossiers = sources::read_dossiers(root)?;
+    let mut files = Files::new();
+    let dossiers = sources::read_dossiers(&mut files, root)?;
     let dossier = select(&dossiers, args)?;
     let name = worklog::stem(&dossier);
     let chosen_shown = sources::relative(&dossier, root).display().to_string();
 
     // Everything that can fail is done before the prompt, so a dossier that
     // cannot take a worklog never costs the user the line they typed.
-    let contents =
-        fs::read_to_string(&dossier).with_context(|| format!("could not read '{chosen_shown}'"))?;
+    let contents = files.read(&dossier)?.to_owned();
     if !worklog::has_worklog(&contents) {
         bail!("'{chosen_shown}' has no '## Worklog' section, so there is nowhere to log this");
     }

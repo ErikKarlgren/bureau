@@ -1,13 +1,13 @@
 //! `bureau report`.
 
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use chrono::{Local, NaiveDate};
 
 use crate::cli::ReportArgs;
+use crate::commands::files::Files;
 use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
 use crate::commands::{selection, sources};
 use crate::git;
@@ -104,7 +104,8 @@ fn run_in(
 
     // The report looks at every dossier, sealed ones included: a seal hides a
     // dossier from action, not from history.
-    let all = sources::read_markdown(root, DOSSIERS_DIR)?;
+    let mut files = Files::new();
+    let all = sources::read_markdown(&mut files, root, DOSSIERS_DIR)?;
     let selected = if args.filter.is_some() || args.menu {
         let paths: Vec<PathBuf> = all.iter().map(|source| source.path.clone()).collect();
         let request = selection::Request {
@@ -124,8 +125,7 @@ fn run_in(
     let mut dossiers = Vec::new();
     let mut scope = None;
     for path in &chosen {
-        let contents = fs::read_to_string(path)
-            .with_context(|| format!("could not read '{}'", path.display()))?;
+        let contents = files.read(path)?.to_owned();
         let name = worklog::stem(path);
 
         // A filtered report says which dossier it is about, by the name the
@@ -144,7 +144,7 @@ fn run_in(
     // out: they belong to the whole day, not to that dossier.
     let mut entries = BTreeMap::new();
     if selected.is_none() {
-        for source in sources::read_markdown(root, ENTRIES_DIR)? {
+        for source in sources::read_markdown(&mut files, root, ENTRIES_DIR)? {
             let Some(date) = source
                 .path
                 .file_stem()
@@ -158,9 +158,7 @@ fn run_in(
                 continue;
             }
 
-            let contents = fs::read_to_string(&source.path)
-                .with_context(|| format!("could not read '{}'", source.path.display()))?;
-            entries.insert(date, contents);
+            entries.insert(date, files.read(&source.path)?.to_owned());
         }
     }
 
@@ -413,17 +411,23 @@ mod tests {
         let root = scratch.path();
         git(root, &["init", "-q"]);
         scratch
-            .write("dossiers/A.md", "## Worklog\n### 2026-09-20\n- did A\n")
+            .write(
+                "dossiers/A.md",
+                "## Worklog\n### [2026-09-20](<../entries/2026-09-20.md>)\n- did A\n",
+            )
             .unwrap();
         scratch
-            .write("dossiers/B.md", "## Worklog\n### 2026-09-20\n- did B\n")
+            .write(
+                "dossiers/B.md",
+                "## Worklog\n### [2026-09-20](<../entries/2026-09-20.md>)\n- did B\n",
+            )
             .unwrap();
         git(root, &["add", "-A"]);
         git_at(root, &["commit", "-qm", "base"], "2026-09-10T12:00:00");
         scratch
             .write(
                 "dossiers/A.md",
-                "## Worklog\n### 2026-09-20\n- did A\n- and again\n",
+                "## Worklog\n### [2026-09-20](<../entries/2026-09-20.md>)\n- did A\n- and again\n",
             )
             .unwrap();
         git_at(
@@ -434,7 +438,7 @@ mod tests {
         scratch
             .write(
                 "dossiers/B.md",
-                "## Worklog\n### 2026-09-20\n- did B\n- and again\n",
+                "## Worklog\n### [2026-09-20](<../entries/2026-09-20.md>)\n- did B\n- and again\n",
             )
             .unwrap();
         git_at(
@@ -556,7 +560,10 @@ mod tests {
     fn with_dossier(name: &str) -> Scratch {
         let scratch = Scratch::new(name).unwrap();
         scratch
-            .write("dossiers/A.md", "## Worklog\n### 2026-09-20\n- did A\n")
+            .write(
+                "dossiers/A.md",
+                "## Worklog\n### [2026-09-20](<../entries/2026-09-20.md>)\n- did A\n",
+            )
             .unwrap();
         scratch
     }
@@ -603,7 +610,7 @@ mod tests {
         scratch
             .write(
                 "dossiers/9 - sealed.md",
-                "---\nsealed: 2026-09-21\n---\n## Worklog\n### 2026-09-20\n- sealed work\n",
+                "---\nsealed: 2026-09-21\n---\n## Worklog\n### [2026-09-20](<../entries/2026-09-20.md>)\n- sealed work\n",
             )
             .unwrap();
 
@@ -850,7 +857,10 @@ mod tests {
     fn a_filter_reports_one_dossier_without_the_entry() {
         let scratch = with_dossier("report-filter");
         scratch
-            .write("dossiers/B.md", "## Worklog\n### 2026-09-20\n- did B\n")
+            .write(
+                "dossiers/B.md",
+                "## Worklog\n### [2026-09-20](<../entries/2026-09-20.md>)\n- did B\n",
+            )
             .unwrap();
         scratch
             .write(
@@ -885,7 +895,7 @@ mod tests {
         scratch
             .write(
                 "dossiers/a_b.md",
-                "# a::b\n\n## Worklog\n### 2026-09-20\n- did the thing\n",
+                "# a::b\n\n## Worklog\n### [2026-09-20](<../entries/2026-09-20.md>)\n- did the thing\n",
             )
             .unwrap();
 
@@ -905,7 +915,10 @@ mod tests {
     fn a_menu_opens_the_picker_over_every_dossier() {
         let scratch = with_dossier("report-menu");
         scratch
-            .write("dossiers/B.md", "## Worklog\n### 2026-09-20\n- did B\n")
+            .write(
+                "dossiers/B.md",
+                "## Worklog\n### [2026-09-20](<../entries/2026-09-20.md>)\n- did B\n",
+            )
             .unwrap();
         let chosen_path = scratch.path().join("dossiers/B.md");
         let picker = move |_: &[PathBuf]| Ok(chosen_path.clone());
@@ -939,5 +952,26 @@ mod tests {
 
         assert!(output.contains("# Report for 2026-09-20"), "{output}");
         assert!(!output.contains(" to "), "{output}");
+    }
+
+    #[test]
+    fn a_bare_worklog_day_is_not_a_report_day() {
+        let scratch = Scratch::new("report-bare-day").unwrap();
+        scratch
+            .write("dossiers/A.md", "## Worklog\n### 2026-09-20\n- did A\n")
+            .unwrap();
+        scratch
+            .write(
+                "entries/2026-09-20.md",
+                "# 2026-09-20\n\n## Notes\n- day note\n\n## Worked on Dossiers\n\
+                 - [A](<../dossiers/A.md>)\n",
+            )
+            .unwrap();
+
+        let (output, _) = run_report(&scratch, &args()).unwrap();
+
+        assert!(output.contains("day note"), "{output}");
+        assert!(!output.contains("did A"), "{output}");
+        assert!(!output.contains("### A"), "{output}");
     }
 }

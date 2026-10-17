@@ -8,6 +8,7 @@ use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 
+use crate::commands::files::Files;
 use crate::commands::paths::DOSSIERS_DIR;
 use crate::style;
 
@@ -42,7 +43,7 @@ impl Source {
 /// Fails when the directory is there but cannot be read. A file that cannot be
 /// read is skipped with a warning, so one unreadable note does not hide every
 /// other one.
-pub fn read_markdown(root: &Path, directory: &str) -> Result<Vec<Source>> {
+pub fn read_markdown(files: &mut Files, root: &Path, directory: &str) -> Result<Vec<Source>> {
     let directory = root.join(directory);
     let entries = match fs::read_dir(&directory) {
         Ok(entries) => entries,
@@ -58,7 +59,7 @@ pub fn read_markdown(root: &Path, directory: &str) -> Result<Vec<Source>> {
             .with_context(|| format!("could not read '{}'", directory.display()))?
             .path();
         if path.extension().is_some_and(|extension| extension == "md") {
-            match source_of(path) {
+            match source_of(files, path) {
                 Ok(source) => sources.push(source),
                 // A permission error, a broken symlink, a directory that
                 // happens to end in `.md`: one bad file must not cost the user
@@ -76,12 +77,11 @@ pub fn read_markdown(root: &Path, directory: &str) -> Result<Vec<Source>> {
 
 /// One file as a [`Source`], reading its frontmatter to see whether it is
 /// sealed.
-fn source_of(path: PathBuf) -> Result<Source> {
-    let contents = fs::read_to_string(&path)
-        .with_context(|| format!("could not read '{}'", path.display()))?;
+fn source_of(files: &mut Files, path: PathBuf) -> Result<Source> {
+    let contents = files.read(&path)?;
 
     Ok(Source {
-        sealed: is_sealed(&contents),
+        sealed: is_sealed(contents),
         path,
     })
 }
@@ -120,8 +120,12 @@ pub fn open_paths(sources: &[Source]) -> Vec<PathBuf> {
 ///
 /// Fails when the dossiers directory is there but cannot be read, or when one
 /// of the files cannot be read to check whether it is sealed.
-pub fn read_dossiers(root: &Path) -> Result<Vec<PathBuf>> {
-    Ok(by_recency(open_paths(&read_markdown(root, DOSSIERS_DIR)?)))
+pub fn read_dossiers(files: &mut Files, root: &Path) -> Result<Vec<PathBuf>> {
+    Ok(by_recency(open_paths(&read_markdown(
+        files,
+        root,
+        DOSSIERS_DIR,
+    )?)))
 }
 
 /// Paths sorted most recently modified first, by name within equal times.

@@ -18,7 +18,7 @@ use crate::worklog;
 pub struct Dossier {
     /// The dossier's name: its file name without the extension.
     pub name: String,
-    /// Each `### date` block, in the order it appears in the file.
+    /// Each linked `### date` block, in the order it appears in the file.
     pub days: Vec<(NaiveDate, String)>,
 }
 
@@ -66,7 +66,7 @@ pub enum Changes {
 /// A day is in the report when it has an entry file or a dossier logged work
 /// on it. An entry that renders no bullets still makes the day -- with no work
 /// in it, which the report says out loud rather than printing a bare heading.
-/// Duplicate `### date` headings in one dossier are merged in document order,
+/// Duplicate linked day headings in one dossier are merged in document order,
 /// and a dossier or a day whose worklog holds nothing to print is left out
 /// rather than given an empty heading.
 #[must_use]

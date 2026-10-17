@@ -255,7 +255,8 @@ which is why that branch takes `--all` to be listed at all.
 
 Any other symbol (`[!]`, `[>]`, `[X]`, …) is not a recognised marker, so the
 bullet is treated as prose and ignored. Nothing is reported about it: this is a
-listing, not a linter.
+listing, not a linter. `bureau doctor` is where an unrecognised marker is
+reported.
 
 ### What counts as a parent
 

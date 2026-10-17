@@ -21,6 +21,7 @@ bureau tasks
 bureau tasks --all
 bureau report
 bureau report --from "a week ago"
+bureau doctor
 ```
 
 Dossiers are written to `dossiers/<name>.md` and daily entries to
@@ -120,6 +121,14 @@ prints plain text on stdout, and is meant to be piped into a file or an LLM —
 Sealed dossiers are still included: a seal hides a dossier from `tasks`, not
 from history. The exact rules live in
 [`docs/subcommands/report.md`](docs/subcommands/report.md).
+
+`bureau doctor` checks the notes for formatting problems: broken relative links,
+non-portable file names, a missing or malformed `## Worklog`, worklog day
+headings that do not link to their entry, empty tasks, task markers
+`bureau tasks` cannot see, line endings, and dossier/entry links that disagree.
+It is read-only, prints one `path:line: Severity: message` finding per line on
+stdout, and exits 1 only when it finds an error. Warnings do not fail the run.
+The exact rules live in [`docs/subcommands/doctor.md`](docs/subcommands/doctor.md).
 
 ## License
 MIT. See [LICENSE](LICENSE).

@@ -134,8 +134,9 @@ vocabulary ever outgrows a closed grammar.
 
 The period is a set of **calendar days**. A day is in the report when
 
-- a dossier's `## Worklog` has a `### <date>` heading in the period whose block
-  holds at least one line, or
+- a dossier's `## Worklog` has a
+  `### [<date>](<../entries/<date>.md>)` heading in the period whose block holds
+  at least one line, or
 - that day has an entry file.
 
 A day's **work** is what it renders: the entry's bullets, or the `###` blocks of
@@ -145,14 +146,15 @@ names that case rather than dropping the day.
 
 The dossier worklog can be a day's only source. `bureau worklog --date <date>`
 creates the day's entry when it is missing, so a day that was logged through the
-tool always has one to inspect; but a worklog written by hand, or one whose
-entry was deleted afterwards, still reports on its own, and is never an error
-about a missing entry.
+tool always has one to inspect; but a worklog written by hand with linked day
+headings, or one whose entry was deleted afterwards, still reports on its own,
+and is never an error about a missing entry.
 
 An entry that renders nothing still makes the day. In a period that has work in
 it, such a day prints its heading followed by `(No work found)` rather than a
-bare heading. A day whose only trace is an empty `### date` heading -- no
-entry, no worklog lines -- is left out entirely.
+bare heading. A day whose only trace is an empty
+`### [<date>](<../entries/<date>.md>)` heading -- no entry, no worklog lines --
+is left out entirely.
 
 Git time does not define the period. This matters because
 `bureau worklog --date` exists precisely to **backfill**: a line dated three
@@ -414,8 +416,7 @@ printed. To keep that true:
 - **CRLF:** reading a file yields `\r`; strip it when parsing lines. Writing
   uses `writeln!`, which emits `\n` on every platform, so the output has no
   `\r` regardless of host.
-- **Duplicate `### <date>` headings** in one dossier: merged, in document
-  order.
+- **Duplicate linked day headings** in one dossier: merged, in document order.
 - **A date with dossier worklogs but no entry file** (backfill): dossier order
   falls back to name ascending.
 - **Malformed or undated `###` headings**, and dates outside the period: not
