@@ -111,9 +111,6 @@
       commits it needs to traverse. A day is after all the time unit bureau
       works with.
 - [ ] Let the user have their own custom templates for dossiers and entries.
-- [ ] Rework the UI/UX for `bureau new`. It's pure white text, and it could use
-      some colors and some "readline" implementation (arrows don't work properly
-      when editing text)
 - [ ] `bureau init`: Creates a git repo if it doesn't exist, adds some files
       with already chosen presets (`.nvim.lua` with pre-configured folds, maybe
       some git hooks, etc)

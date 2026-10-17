@@ -1,19 +1,27 @@
 //! `bureau new dossier` and `bureau new entry`.
 
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Component, Path};
 
 use anyhow::{Context, bail};
 use chrono::Local;
+use dialoguer::Input;
 
 use crate::Result;
 use crate::cli::DossierArgs;
 use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
 use crate::dossier;
 use crate::git;
+use crate::prompt::{self, PrefixTheme};
 use crate::style::{self, Palette};
 use crate::template;
+
+/// What the description prompt asks the user to do.
+const DESCRIPTION_HINT: &str = "(finish with a line containing only '.')";
+
+/// What the optional link prompt asks the user to do.
+const LINK_HINT: &str = "(optional, e.g. Jira; press Enter to skip)";
 
 /// Create a dossier named after the arguments, then commit it.
 ///
@@ -22,15 +30,35 @@ use crate::template;
 /// Fails when the current directory is not in a git repository, when a dossier
 /// with the same name already exists, or when the dossier cannot be written.
 pub fn dossier(args: &DossierArgs) -> Result<()> {
+    let root = git::toplevel()?;
     let base = std::env::current_dir().ok();
+    let palette = style::for_stdout();
+    let prompt_palette = style::for_stderr();
 
-    run_in(
-        &git::toplevel()?,
-        base.as_deref(),
-        args,
-        style::for_stdout(),
-        io::stdin().lock(),
-    )
+    if io::stdin().is_terminal() && io::stderr().is_terminal() {
+        let mut answers = InteractiveAnswers;
+        run_in(
+            &root,
+            base.as_deref(),
+            args,
+            palette,
+            prompt_palette,
+            &mut answers,
+        )
+    } else {
+        let stdin = io::stdin();
+        let mut answers = PipedAnswers {
+            answers: stdin.lock(),
+        };
+        run_in(
+            &root,
+            base.as_deref(),
+            args,
+            palette,
+            prompt_palette,
+            &mut answers,
+        )
+    }
 }
 
 /// Create today's daily entry, then commit it.
@@ -62,15 +90,50 @@ pub fn entry() -> Result<()> {
     )
 }
 
+/// The answers to the description and link prompts.
+///
+/// The two implementations keep the same flow testable without a terminal
+/// while letting a person edit each line at one.
+trait Answers {
+    fn read(&mut self, palette: Palette) -> Result<(String, String)>;
+}
+
+/// Answers read one line at a time from a pipe, a file or a test.
+struct PipedAnswers<R> {
+    answers: R,
+}
+
+impl<R: BufRead> Answers for PipedAnswers<R> {
+    fn read(&mut self, palette: Palette) -> Result<(String, String)> {
+        let description = read_description(&mut self.answers, palette)?;
+        let link = read_link(&mut self.answers, palette)?;
+
+        Ok((description, link))
+    }
+}
+
+/// Answers read through a line editor, one line per prompt.
+struct InteractiveAnswers;
+
+impl Answers for InteractiveAnswers {
+    fn read(&mut self, palette: Palette) -> Result<(String, String)> {
+        let description = read_description_interactive(palette)?;
+        let link = read_link_interactive(palette)?;
+
+        Ok((description, link))
+    }
+}
+
 /// The rest of [`dossier`], with the repository root, the directory the names
-/// are read from, the colours and the answers to its two prompts handed in, so
-/// a test can drive it without a git checkout, a terminal or an environment.
+/// are read from, the colours and the answers handed in, so a test can drive it
+/// without a git checkout, a terminal or an environment.
 fn run_in(
     root: &Path,
     base: Option<&Path>,
     args: &DossierArgs,
     palette: Palette,
-    answers: impl BufRead,
+    prompt_palette: Palette,
+    answers: &mut impl Answers,
 ) -> Result<()> {
     let name = args.name.join(" ");
     let path = root
@@ -82,9 +145,12 @@ fn run_in(
         bail!("a dossier already exists at '{shown}'");
     }
 
-    let creation_date = now();
-    let (description, link) = read_answers(answers)?;
+    println!("{}", creating_dossier(&name, palette));
+    println!();
 
+    let (description, link) = answers.read(prompt_palette)?;
+
+    let creation_date = now();
     let contents = template::render(
         template::DOSSIER,
         &[
@@ -107,43 +173,88 @@ fn now() -> String {
     format!("{} {}", now.format("%Y-%m-%d"), now.format("%H:%M:%S"))
 }
 
-/// Read the description and the optional link, in the order the prompts ask for
-/// them.
-fn read_answers(mut answers: impl BufRead) -> Result<(String, String)> {
-    let description = read_description(&mut answers)?;
-    let link = read_link(&mut answers)?;
-
-    Ok((description, link))
-}
-
 /// Read the description, ending at a line containing only a dot.
-fn read_description(answers: &mut impl BufRead) -> Result<String> {
-    println!("Enter dossier's description. When done, write a line containing only '.'");
+fn read_description(answers: &mut impl BufRead, palette: Palette) -> Result<String> {
+    eprintln!(
+        "{}",
+        prompt::label(palette, "Description", DESCRIPTION_HINT)
+    );
 
     let mut lines = Vec::new();
-    for line in answers.lines() {
-        let line = line?;
+    loop {
+        let mut line = String::new();
+        if answers.read_line(&mut line)? == 0 {
+            break;
+        }
+
+        let line = line.trim_end_matches(['\r', '\n']);
         if line == "." {
             break;
         }
-        lines.push(line);
+        lines.push(line.to_owned());
     }
+    eprintln!();
 
     Ok(lines.join("\n"))
 }
 
 /// Read the optional link to the task this dossier is about.
-fn read_link(answers: &mut impl BufRead) -> Result<String> {
-    print!("Link to issue (e.g. Jira). If none, press Enter: ");
-    io::stdout().flush()?;
+fn read_link(answers: &mut impl BufRead, palette: Palette) -> Result<String> {
+    eprint!("{}", prompt::prompt(palette, "Issue link", LINK_HINT));
+    io::stderr().flush()?;
 
     let mut link = String::new();
     if answers.read_line(&mut link)? == 0 {
         // The answers ended, which means no link.
+        eprintln!();
         return Ok(String::new());
     }
 
-    let link = link.trim_end_matches(['\r', '\n']);
+    let link = link.trim();
+    eprintln!();
+    if link.is_empty() {
+        return Ok(String::new());
+    }
+
+    Ok(format!("- [Link to task]({link})\n"))
+}
+
+/// Read the description with a line editor, one `> ` prompt per line.
+fn read_description_interactive(palette: Palette) -> Result<String> {
+    eprintln!(
+        "{}",
+        prompt::label(palette, "Description", DESCRIPTION_HINT)
+    );
+
+    let theme = PrefixTheme::new(prompt::gutter(palette));
+    let mut lines = Vec::new();
+    loop {
+        let line = Input::<String>::with_theme(&theme)
+            .allow_empty(true)
+            .with_prompt("")
+            .interact_text()
+            .context("could not read the description")?;
+
+        if line == "." {
+            break;
+        }
+        lines.push(line);
+    }
+    eprintln!();
+
+    Ok(lines.join("\n"))
+}
+
+/// Read the optional link with a line editor.
+fn read_link_interactive(palette: Palette) -> Result<String> {
+    let theme = PrefixTheme::new(prompt::prompt(palette, "Issue link", LINK_HINT));
+    let link = Input::<String>::with_theme(&theme)
+        .allow_empty(true)
+        .with_prompt("")
+        .interact_text()
+        .context("could not read the issue link")?;
+
+    let link = link.trim();
     if link.is_empty() {
         return Ok(String::new());
     }
@@ -181,10 +292,18 @@ fn write_and_commit(
     Ok(())
 }
 
-/// What to print once the file is on disk: the one line a person wants after
-/// asking for a file, with its name painted.
+/// What to print once the file is on disk: the bold verb and the painted name.
 fn created(shown: &str, palette: Palette) -> String {
-    format!("Created {}", palette.quoted(shown))
+    format!(
+        "{} {}",
+        palette.heading().paint("Created"),
+        palette.quoted(shown)
+    )
+}
+
+/// What to print before the prompts: the name the user gave, painted.
+fn creating_dossier(name: &str, palette: Palette) -> String {
+    format!("Creating dossier {}", palette.quoted(name))
 }
 
 /// The name to print for `path`: how to walk to it from `base`, the current
@@ -296,17 +415,50 @@ mod tests {
         );
     }
 
+    /// Run the dossier flow with answers from a string.
+    fn run_answers(
+        scratch: &Scratch,
+        base: &Path,
+        args: &DossierArgs,
+        answers: &str,
+    ) -> Result<()> {
+        let mut answers = PipedAnswers {
+            answers: Cursor::new(answers),
+        };
+
+        run_in(
+            scratch.path(),
+            Some(base),
+            args,
+            Palette::OFF,
+            Palette::OFF,
+            &mut answers,
+        )
+    }
+
     #[test]
-    fn only_the_path_of_a_created_file_takes_a_hue() {
-        // The sentence around it is not painted: only the path was asked for,
-        // so a copy of the line pastes the path and not a screenful of escapes.
+    fn a_created_file_bolds_only_the_verb_and_paints_only_the_path() {
+        // The verb is bold, the path is cyan, and the quotes stay plain: a copy
+        // of the line pastes the path and not a screenful of escapes.
         assert_eq!(
             created("dossiers/1234 - fewafw.md", Palette::ON),
-            "Created '\x1b[36mdossiers/1234 - fewafw.md\x1b[0m'"
+            "\x1b[1mCreated\x1b[0m '\x1b[36mdossiers/1234 - fewafw.md\x1b[0m'"
         );
         assert_eq!(
             created("dossiers/1234 - fewafw.md", Palette::OFF),
             "Created 'dossiers/1234 - fewafw.md'"
+        );
+    }
+
+    #[test]
+    fn a_creating_line_paints_only_the_name() {
+        assert_eq!(
+            creating_dossier("1234 - fewafw", Palette::ON),
+            "Creating dossier '\x1b[36m1234 - fewafw\x1b[0m'"
+        );
+        assert_eq!(
+            creating_dossier("1234 - fewafw", Palette::OFF),
+            "Creating dossier '1234 - fewafw'"
         );
     }
 
@@ -347,15 +499,13 @@ mod tests {
     #[test]
     fn a_new_dossier_is_named_after_its_arguments() {
         let scratch = Scratch::new("new-dossier").unwrap();
-        let answers = Cursor::new("A dossier about the font.\n.\nThe link.\n");
 
         let base = base(&scratch);
-        run_in(
-            scratch.path(),
-            Some(&base),
+        run_answers(
+            &scratch,
+            &base,
             &args("1234 - fewafw"),
-            Palette::OFF,
-            answers,
+            "A dossier about the font.\n.\nThe link.\n",
         )
         .unwrap();
 
@@ -367,15 +517,13 @@ mod tests {
     #[test]
     fn a_dossier_takes_no_link_when_the_answers_end_after_the_description() {
         let scratch = Scratch::new("new-dossier-no-link").unwrap();
-        let answers = Cursor::new("Nothing to link to.\n.\n");
 
         let base = base(&scratch);
-        run_in(
-            scratch.path(),
-            Some(&base),
+        run_answers(
+            &scratch,
+            &base,
             &args("5678 - quiet"),
-            Palette::OFF,
-            answers,
+            "Nothing to link to.\n.\n",
         )
         .unwrap();
 
@@ -388,15 +536,13 @@ mod tests {
     fn a_new_dossier_commit_is_titled_after_its_file() {
         let scratch = Scratch::new("new-dossier-commit").unwrap();
         scratch.init_git();
-        let answers = Cursor::new("A dossier about the font.\n.\n\n");
 
         let base = base(&scratch);
-        run_in(
-            scratch.path(),
-            Some(&base),
+        run_answers(
+            &scratch,
+            &base,
             &args("1234 - fewafw"),
-            Palette::OFF,
-            answers,
+            "A dossier about the font.\n.\n\n",
         )
         .unwrap();
 
@@ -412,14 +558,7 @@ mod tests {
         scratch.write("dossiers/1 - here.md", "# Mine\n").unwrap();
 
         let base = base(&scratch);
-        let error = run_in(
-            scratch.path(),
-            Some(&base),
-            &args("1 - here"),
-            Palette::OFF,
-            Cursor::new("...\n"),
-        )
-        .unwrap_err();
+        let error = run_answers(&scratch, &base, &args("1 - here"), "").unwrap_err();
 
         // The refusal names the file the way the message would have: the same
         // name relative to where the user is standing.

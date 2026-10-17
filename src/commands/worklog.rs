@@ -1,6 +1,5 @@
 //! `bureau worklog`.
 
-use std::fmt;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -8,13 +7,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail};
 use chrono::{Local, NaiveDate};
 use dialoguer::Input;
-use dialoguer::theme::Theme;
 
 use crate::Result;
 use crate::cli::WorklogArgs;
 use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
 use crate::commands::{selection, sources};
 use crate::git;
+use crate::prompt::{self, PrefixTheme};
 use crate::style::{self, Palette};
 use crate::template;
 use crate::worklog;
@@ -24,50 +23,6 @@ use crate::worklog;
 struct Colours {
     palette: Palette,
     warning_palette: Palette,
-}
-
-/// The label and hint of the message prompt.
-const MESSAGE_PROMPT: &str = "Message";
-const MESSAGE_HINT: &str = "(Ctrl-C to cancel)";
-
-/// The prompt line: a bold label and a dim hint, with the colon left plain.
-///
-/// `dialoguer` measures text width with the ANSI sequences ignored, so styling
-/// the prompt does not disturb its wrapping.
-fn message_prompt(palette: Palette, label: &str) -> String {
-    format!(
-        "{} {}: ",
-        palette.heading().paint(label),
-        palette.context().paint(MESSAGE_HINT)
-    )
-}
-
-/// The `dialoguer` theme that renders [`message_prompt`].
-struct WorklogTheme {
-    palette: Palette,
-}
-
-impl Theme for WorklogTheme {
-    fn format_input_prompt(
-        &self,
-        f: &mut dyn fmt::Write,
-        prompt: &str,
-        _default: Option<&str>,
-    ) -> fmt::Result {
-        f.write_str(&message_prompt(self.palette, prompt))
-    }
-
-    fn format_input_prompt_selection(
-        &self,
-        f: &mut dyn fmt::Write,
-        prompt: &str,
-        selection: &str,
-    ) -> fmt::Result {
-        f.write_str(&format!(
-            "{}{selection}",
-            message_prompt(self.palette, prompt)
-        ))
-    }
 }
 
 /// Log one line of work against a dossier, and link it from that day's entry.
@@ -448,16 +403,19 @@ fn prompt_for_message() -> Result<String> {
     let palette = style::for_stderr();
 
     if io::stdin().is_terminal() && io::stderr().is_terminal() {
-        let theme = WorklogTheme { palette };
+        let theme = PrefixTheme::new(prompt::prompt(palette, "Message", "(Ctrl-C to cancel)"));
         let message = Input::<String>::with_theme(&theme)
-            .with_prompt(MESSAGE_PROMPT)
+            .with_prompt("")
             .interact_text()
             .context("could not read the message")?;
 
         return checked(message);
     }
 
-    eprint!("{}", message_prompt(palette, MESSAGE_PROMPT));
+    eprint!(
+        "{}",
+        prompt::prompt(palette, "Message", "(Ctrl-C to cancel)")
+    );
     io::stderr().flush()?;
 
     let mut message = String::new();
@@ -525,18 +483,6 @@ mod tests {
             palette: Palette::OFF,
             warning_palette: Palette::OFF,
         }
-    }
-
-    #[test]
-    fn the_prompt_bolds_the_label_and_dims_the_hint() {
-        assert_eq!(
-            message_prompt(Palette::ON, "Message"),
-            "\x1b[1mMessage\x1b[0m \x1b[2m(Ctrl-C to cancel)\x1b[0m: "
-        );
-        assert_eq!(
-            message_prompt(Palette::OFF, "Message"),
-            "Message (Ctrl-C to cancel): "
-        );
     }
 
     /// Run the command with the plain palette and capture both streams.

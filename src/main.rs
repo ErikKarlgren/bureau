@@ -5,6 +5,7 @@ mod commands;
 mod date;
 mod dossier;
 mod git;
+mod prompt;
 mod report;
 mod style;
 mod tasks;
