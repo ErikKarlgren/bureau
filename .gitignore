@@ -3,3 +3,5 @@
 # For testing purposes, in case I don't want to create a new repo to test the tool
 /entries
 /dossiers
+# Git repo for testing purposes
+/tmp
