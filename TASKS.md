@@ -1,9 +1,12 @@
 # Tasks
 
-## Pending features
-- [ ] `bureau seal <dossier>` — mark a dossier as sealed via a `sealed: <YYYY-MM-DD>`
-      frontmatter field. Sealed dossiers should be excluded from `worklog` selection
-      by default, with an `--all` flag to include them.
+## new
+
+- [ ] `bureau new dossier`: after creating a new dossier, run `bureau worklog`, add the message "created dossier", and link this new dossier to today's entry. If the latter doesn't exist, simply create it then.
+      - By "run `bureau worklog`" I mean doing so without shelling out
+
+## tasks
+
 - [ ] When `bureau seal` lands, `bureau tasks` must warn about dossiers whose
       tasks are all finished, since those are the ones that can be sealed.
       Until then, `--all` lists them with no hint at all. The check for a
@@ -16,32 +19,6 @@
       over data the parser has anyway.
 - [ ] `bureau tasks`: show "ready-to-close" dossiers. After `bureau seal` has been implemented, `bureau tasks` must check if there are any "open" dossiers that only contain "finished" tasks (i.e. `[x]` or `[-]`). For all such dossiers, print a warning after printing all found tasks. The goal is reminding the user to clean the output of `bureau tasks --all` by sealing ready-to-close dossiers.
 - [ ] `bureau tasks`: warn about "stale dossiers", which means dossiers that haven't been sealed, still have non-finished tasks, and haven't been worked on in the last X days/weeks. This should provide a lot of value in the future if the user ends up having dozens of dossiers to remind them to take care of old non-finished work. Checking how long they haven't been worked on would depend on the last date they have in the `Worklog` section and compare it to their mtime. In fact, we could maybe extend this to also warn about dossiers that don't have any worklogs and which already are X days old, all to remind the user of working on them, but I'm slightly less sure about how to implement this.
-- [ ] Rework the `README.md` to make it easier to understand to other people how `bureau` is meant to be used. Mention how the repo owner uses it with neovim+telescope, and how it should also work fine with vscode (ctrl-p toquickly switch between files, etc) and other code editors.
-      - Mention too how the tool has been mostly vibecoded with Deepseek (because the implementation doesn't interest me thaaaat much in comparison to other personal projects, although it does a bit), but how at the same time it's meant for manual workflows
-      - The repo owner shall write the readme themselves and manually, so the LLM must simply help them brainstorm, structure the file and fix typos and wording issues
-      - This tool should also work well enough with Obsidian, Joplin, ... right?
-- [ ] Add a logo to the readme. I'm thinking of a drawer full of dossiers, maybe showing git-related. I wonder if I should really make it with AI due to ethical concerns, even if most of the code here has been written by deepseek.
-- [ ] `bureau rename`: for renaming dossiers and all relevant links, cause right now it'd need to be manually done. This would of course also commit the affected files
-- [ ] `bureau doctor` follow-ups: `--strict` (warnings fail), `--fix` for the
-      checks where the edit is unambiguous (worklog day links, cross-link
-      direction one, line endings), an indentation warning, empty plain
-      bullets, missing non-required template sections, anchors/reference
-      links, and non-date files in `entries/`.
-- [ ] `bureau new dossier`: after creating a new dossier, run `bureau worklog`, add the message "created dossier", and link this new dossier to today's entry. If the latter doesn't exist, simply create it then.
-      - By "run `bureau worklog`" I mean doing so without shelling out
-- [ ] Reading a note in full just to check whether it is sealed: `is_sealed` only
-      looks at the leading frontmatter, but `source_of` reads the whole file.
-      Reading just the head would save the I/O and the allocation on large
-      dossiers; low value while notes are small, so it was left alone.
-- [ ] `bureau report` performance: mention (or write) a commit-graph. The
-      path-limited history walk that finds each dossier's base commit costs
-      ~1.2 µs per commit traversed, and `git commit-graph write --reachable`
-      made the same query 2.4× faster (24.60 ms → 60.23 ms without it) on a
-      20,000-commit repository with no code change at all. It is a repository
-      setting rather than something bureau should do behind the user's back,
-      so this is a README line, not a feature.
-- [ ] Shell completion for bash and fish
-- [ ] Fix commit behavior. Whenever any `bureau` command is run, all files dependant on `bureau` (for now only entries/ and dossiers/) need to be committed. Need to discuss whether to create 1 commit per file, 1 commit per type of file (e.g. 1 commit for all daily entries, another for all dossiers). The problem to fix is that, after manually editing some files already created with `bureau new`, the changes aren't committed automatically, and then the user needs to do so manually, which is undesired.
 - [ ] Maybe fix later: `bureau tasks` treats a task inside a fenced (or indented)
       code block as real work. `Tree::parse` only looks for a leading `-`, so an
       example checklist pasted into a dossier shows up in the listing. No
@@ -55,6 +32,15 @@
       choosing the output shape is the work. General features come first, so
       this is not a priority.
 
+## report
+
+- [ ] `bureau report` performance: mention (or write) a commit-graph. The
+      path-limited history walk that finds each dossier's base commit costs
+      ~1.2 µs per commit traversed, and `git commit-graph write --reachable`
+      made the same query 2.4× faster (24.60 ms → 60.23 ms without it) on a
+      20,000-commit repository with no code change at all. It is a repository
+      setting rather than something bureau should do behind the user's back,
+      so this is a README line, not a feature.
 - [ ] `bureau report` diff size: a dossier created in the period diffs as its
       whole file, so `## Git diff` can dwarf the daily work that is the
       report's point. Consider a per-dossier `--numstat` line and a
@@ -102,12 +88,61 @@
       already colour it. Weigh it against the rule that the report never
       repaints a diff: white is a hue nothing else in the report uses, so the
       context lines would gain a colour the palette does not otherwise have.
+
+## doctor
+
+- [ ] `bureau doctor` follow-ups:
+      - `--strict`, so warnings can fail a CI or pre-commit run.
+      - An ignore/suppression mechanism, before the rule set grows further.
+      - Revisit the missing `## Worked on Dossiers` warning: it is currently
+        the largest source of noise, especially for entries that never mention
+        a dossier.
+      - Make ignored notes visible: non-date files in `entries/`, non-`.md`
+        files in either notes directory, and any other file bureau will not
+        read.
+      - A narrow `--fix` for the mechanical repairs: line endings, missing
+        worklog day links, and cross-link direction one.
+      - Keep doctor out of task statistics, stale dossiers and sealing; those
+        belong to `tasks`.
+      - Share or parity-test the link/task rules with `tasks`, `worklog` and
+        `report`, so doctor cannot drift from the commands.
+      - Investigate how to deduplicate the common parser for linked dossiers
+        across `worklog` and doctor.
+      - Deferred checks: indentation warnings, empty plain bullets, missing
+        non-required template sections, and anchors/reference links.
+
+## seal
+
+- [ ] `bureau seal <dossier>` — mark a dossier as sealed via a `sealed: <YYYY-MM-DD>`
+      frontmatter field. Sealed dossiers should be excluded from `worklog` selection
+      by default, with an `--all` flag to include them.
+- [ ] Reading a note in full just to check whether it is sealed: `is_sealed` only
+      looks at the leading frontmatter, but `source_of` reads the whole file.
+      Reading just the head would save the I/O and the allocation on large
+      dossiers; low value while notes are small, so it was left alone.
+
+## rename
+
+- [ ] `bureau rename`: for renaming dossiers and all relevant links, cause right now it'd need to be manually done. This would of course also commit the affected files
+
+## init
+
+- [ ] `bureau init`: Creates a git repo if it doesn't exist, adds some files
+      with already chosen presets (`.nvim.lua` with pre-configured folds, maybe
+      some git hooks, etc)
+
+## Miscellaneous
+
+- [ ] Rework the `README.md` to make it easier to understand to other people how `bureau` is meant to be used. Mention how the repo owner uses it with neovim+telescope, and how it should also work fine with vscode (ctrl-p toquickly switch between files, etc) and other code editors.
+      - Mention too how the tool has been mostly vibecoded with Deepseek (because the implementation doesn't interest me thaaaat much in comparison to other personal projects, although it does a bit), but how at the same time it's meant for manual workflows
+      - The repo owner shall write the readme themselves and manually, so the LLM must simply help them brainstorm, structure the file and fix typos and wording issues
+      - This tool should also work well enough with Obsidian, Joplin, ... right?
+- [ ] Add a logo to the readme. I'm thinking of a drawer full of dossiers, maybe showing git-related. I wonder if I should really make it with AI due to ethical concerns, even if most of the code here has been written by deepseek.
+- [ ] Shell completion for bash and fish
+- [ ] Fix commit behavior. Whenever any `bureau` command is run, all files dependant on `bureau` (for now only entries/ and dossiers/) need to be committed. Need to discuss whether to create 1 commit per file, 1 commit per type of file (e.g. 1 commit for all daily entries, another for all dossiers). The problem to fix is that, after manually editing some files already created with `bureau new`, the changes aren't committed automatically, and then the user needs to do so manually, which is undesired.
 - [ ] Automatic git squashing: squash automatically consecutive commits from
       the same day. This should make `git rev-parse` quite faster, because as
       far as I know, its time complexity scales linearly with the amount of
       commits it needs to traverse. A day is after all the time unit bureau
       works with.
 - [ ] Let the user have their own custom templates for dossiers and entries.
-- [ ] `bureau init`: Creates a git repo if it doesn't exist, adds some files
-      with already chosen presets (`.nvim.lua` with pre-configured folds, maybe
-      some git hooks, etc)
