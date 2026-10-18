@@ -249,22 +249,13 @@ fn read_entries(files: &mut Files, root: &Path) -> Result<Vec<Entry>> {
     let mut entries = Vec::new();
 
     for source in sources::read_markdown(files, root, ENTRIES_DIR)? {
-        let Some(stem) = source
-            .path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(str::to_owned)
-        else {
+        let Some(date) = sources::date_of(&source.path) else {
             continue;
         };
 
-        if sources::date_of(&source.path).is_none() {
-            continue;
-        }
-
         entries.push(Entry {
             path: source.path,
-            heading: format!("{stem} (entry)"),
+            heading: format!("{date} (entry)"),
         });
     }
 

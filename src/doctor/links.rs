@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Component, Path};
 
-use super::document::{Document, Heading};
+use super::document::{BulletMarker, Document, Heading, Link};
 use super::{Check, DOSSIERS_DIR, Finding, Parsed, Severity};
 
 /// Check every local link in one note.
@@ -47,6 +47,7 @@ pub(super) fn check_links(
                 Check::Link,
                 "link target contains spaces; wrap it in <...>",
             ));
+            continue;
         }
 
         let Some(target) = local_target(&link.target) else {
@@ -78,11 +79,32 @@ pub(super) fn check_links(
 }
 
 pub(super) fn entry_links(document: &Document, section: &Heading) -> Vec<String> {
+    entry_dossier_links(document, section)
+        .into_iter()
+        .filter_map(|link| dossier_link_name(&link.target))
+        .collect()
+}
+
+/// The dossier links in an entry section that the other commands would see.
+///
+/// `worklog::linked_dossiers` only reads `- ` bullets, so an entry link on a
+/// `*` bullet or a prose line is not part of the day's index. Doctor has to
+/// use the same rule or its two cross-link directions disagree with `report`.
+pub(super) fn entry_dossier_links<'a>(document: &'a Document, section: &Heading) -> Vec<&'a Link> {
     let end = document.section_end(section);
+    let bullet_lines: HashSet<usize> = document
+        .bullets()
+        .iter()
+        .filter(|bullet| {
+            bullet.marker == BulletMarker::Dash && bullet.line > section.line && bullet.line < end
+        })
+        .map(|bullet| bullet.line)
+        .collect();
+
     document
         .links_between(section.line, end)
         .into_iter()
-        .filter_map(|link| dossier_link_name(&link.target))
+        .filter(|link| bullet_lines.contains(&link.line))
         .collect()
 }
 

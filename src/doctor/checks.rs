@@ -101,7 +101,9 @@ fn check_tasks(note: &Parsed<'_>, findings: &mut Vec<Finding>) {
         match bullet.marker {
             BulletMarker::Dash => check_dash_task(note, bullet, findings),
             BulletMarker::Star | BulletMarker::Plus | BulletMarker::Ordered => {
-                if short_marker(&bullet.text).is_some() {
+                if crate::tasks::task_marker(&bullet.text).is_some()
+                    || looks_like_invalid_marker(&bullet.text)
+                {
                     findings.push(Finding::new(
                         note.path,
                         bullet.line,
@@ -204,8 +206,7 @@ fn looks_like_invalid_marker(text: &str) -> bool {
         return false;
     }
 
-    content.chars().count() <= 1
-        || content
-            .chars()
-            .any(|character| character.is_whitespace() || "xXoO.?-!".contains(character))
+    content
+        .chars()
+        .all(|character| character.is_whitespace() || "xXoO.?-!".contains(character))
 }

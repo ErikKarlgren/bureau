@@ -203,6 +203,59 @@ fn an_entry_without_the_links_section_is_a_warning() {
 }
 
 #[test]
+fn two_entry_names_that_mean_the_same_date_are_reported() {
+    let input = Input {
+        dossiers: Vec::new(),
+        entries: vec![
+            entry("entries/2026-9-2.md", date(2026, 9, 2), "# 2026-9-2\n"),
+            entry("entries/2026-09-02.md", date(2026, 9, 2), "# 2026-09-02\n"),
+        ],
+    };
+
+    let found = findings(&input, &[]);
+
+    assert!(
+        found.iter().any(|finding| {
+            finding.severity == Severity::Error && finding.message.contains("also used")
+        }),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_star_bullet_is_not_a_dossier_link() {
+    let input = Input {
+        dossiers: vec![note(
+            "dossiers/1.md",
+            "## Worklog\n### [2026-09-20](<../entries/2026-09-20.md>)\n- did work\n",
+        )],
+        entries: vec![entry(
+            "entries/2026-09-20.md",
+            date(2026, 9, 20),
+            "# 2026-09-20\n## Worked on Dossiers\n* [1](<../dossiers/1.md>)\n",
+        )],
+    };
+
+    let found = findings(
+        &input,
+        &[("dossiers/1.md", true), ("entries/2026-09-20.md", true)],
+    );
+
+    assert!(
+        found
+            .iter()
+            .any(|finding| finding.message.contains("does not link it")),
+        "{found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .all(|finding| !finding.message.contains("no worklog heading")),
+        "{found:?}"
+    );
+}
+
+#[test]
 fn a_dossier_worklog_day_requires_the_entry_to_link_back() {
     let input = Input {
         dossiers: vec![note(
@@ -399,6 +452,32 @@ fn a_space_in_an_unwrapped_target_is_reported() {
         found
             .iter()
             .any(|finding| finding.message.contains("contains spaces")),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn a_spaced_target_is_reported_once() {
+    let input = Input {
+        dossiers: vec![note(
+            "dossiers/a.md",
+            "## Worklog\n- [file](missing file.md)\n",
+        )],
+        entries: Vec::new(),
+    };
+
+    let found = findings(&input, &[]);
+
+    assert!(
+        found
+            .iter()
+            .any(|finding| finding.message.contains("contains spaces")),
+        "{found:?}"
+    );
+    assert!(
+        found
+            .iter()
+            .all(|finding| !finding.message.contains("does not exist")),
         "{found:?}"
     );
 }

@@ -83,8 +83,8 @@ explicit and dry-run by default; doctor is read-only today.
 
 - **Non-portable file name** (warning): a name Windows cannot check out
   reliably: `< > : " / \ | ? *`, control characters, a reserved device name
-  (`CON`, `NUL`, `COM1`, …), or a name over 255 bytes. This is the same
-  `sanitise-file-name` rule set `bureau new` uses; `a..md` and names with
+  (`CON`, `NUL`, `COM1`, …), or a name over 255 UTF-16 code units. This is the
+  same `sanitise-file-name` rule set `bureau new` uses; `a..md` and names with
   repeated spaces are valid and are not flagged.
 - **Case-insensitive collision** (warning): two names in one directory that
   differ only by case cannot coexist on a case-insensitive filesystem.
@@ -118,6 +118,10 @@ explicit and dry-run by default; doctor is read-only today.
   it the next time it links a dossier, and the user can add it themselves. This
   is a warning even though the command can create it, because an entry without
   the section is not shaped like the other entries.
+- **Duplicate entry date** (error): two entry file names parse to the same date,
+  such as `2026-9-2.md` and `2026-09-02.md`. Only one can be used by the
+  worklog/entry checks, so doctor reports the collision instead of silently
+  choosing one.
 - **Broken relative link** (warning): as for dossiers.
 
 ### Tasks
@@ -152,6 +156,8 @@ warning instead of the first cross-link warning.
 - Empty sections, section order and heading hierarchy.
 - External URLs. Doctor is local and makes no network requests.
 - Anchors and reference-style links.
+- Inline code spans and HTML comments when scanning links; fenced blocks are
+  skipped, but link-shaped text in inline code can still be reported.
 - Non-date files in `entries/`.
 - Task statistics, stale dossiers and ready-to-seal dossiers; those belong to
   `bureau tasks`.

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use chrono::NaiveDate;
 
 use super::document::{Heading, whole_link};
-use super::links::{dossier_link_name, entry_links};
+use super::links::{dossier_link_name, entry_dossier_links, entry_links};
 use super::{
     Check, DATE_FORMAT, ENTRIES_DIR, Finding, LINKS_HEADING, Parsed, ParsedEntry, Severity,
     WORKLOG_HEADING,
@@ -204,9 +204,7 @@ pub(super) fn check_entry_links(
         let Some(section) = entry.note.document.first_exact_section(LINKS_HEADING) else {
             continue;
         };
-        let end = entry.note.document.section_end(section);
-
-        for link in entry.note.document.links_between(section.line, end) {
+        for link in entry_dossier_links(&entry.note.document, section) {
             let Some(name) = dossier_link_name(&link.target) else {
                 continue;
             };

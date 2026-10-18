@@ -147,7 +147,7 @@ pub(super) struct Link {
 pub(super) fn whole_link(text: &str) -> Option<(String, String)> {
     let text = text.trim();
 
-    if !text.starts_with('[') || text.starts_with("![") {
+    if !text.starts_with('[') {
         return None;
     }
 

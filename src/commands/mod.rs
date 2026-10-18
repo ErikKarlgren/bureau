@@ -23,6 +23,10 @@ use crate::cli::{Command, NewCommand};
 /// # Errors
 ///
 /// Whatever the chosen subcommand fails with, ready for `main` to print.
+///
+/// A successful run returns the `ExitCode` the command decided on: `SUCCESS`
+/// for the action commands, and whatever `doctor` chooses (`FAILURE` when it
+/// reports formatting errors, even though the run itself succeeded).
 pub fn run(command: Command) -> Result<ExitCode> {
     match command {
         Command::New {

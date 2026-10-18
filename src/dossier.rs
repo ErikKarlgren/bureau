@@ -37,7 +37,7 @@ const OPTIONS: Options<Option<char>> = Options {
 /// spaces and dots are left to the extension split, because a `*.md` name
 /// cannot end with one while a valid `a..md` must not be rejected.
 const PORTABILITY: Options<Option<char>> = Options {
-    length_limit: 255,
+    length_limit: 765,
     reserve_extra: 0,
     extension_cleverness: true,
     most_fs_safe: true,
@@ -60,6 +60,13 @@ const PORTABILITY: Options<Option<char>> = Options {
 /// Windows rules had anything to change.
 #[must_use]
 pub fn is_portable_filename(name: &str) -> bool {
+    // Windows counts UTF-16 code units, not bytes; the sanitiser's limit is
+    // bytes, so set its limit high enough never to truncate a name Windows
+    // accepts and check the real limit here.
+    if name.encode_utf16().count() > 255 {
+        return false;
+    }
+
     if sanitise_with_options(name, &PORTABILITY) != name {
         return false;
     }
@@ -158,6 +165,12 @@ mod portability_tests {
                 "{name:?} should not be portable"
             );
         }
+    }
+
+    #[test]
+    fn the_length_limit_is_utf16_code_units() {
+        assert!(is_portable_filename(&format!("{}.md", "漢".repeat(252))));
+        assert!(!is_portable_filename(&format!("{}.md", "漢".repeat(253))));
     }
 
     #[test]

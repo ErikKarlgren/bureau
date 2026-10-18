@@ -5,6 +5,7 @@
 //! becoming two reads of every note.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -32,16 +33,23 @@ impl Files {
     ///
     /// Fails when the file cannot be read as UTF-8 text.
     pub fn read(&mut self, path: &Path) -> Result<&str> {
-        if !self.contents.contains_key(path) {
-            let contents = fs::read_to_string(path)
-                .with_context(|| format!("could not read '{}'", path.display()))?;
-            self.contents.insert(path.to_path_buf(), contents);
+        match self.contents.entry(path.to_path_buf()) {
+            Entry::Occupied(entry) => Ok(entry.into_mut().as_str()),
+            Entry::Vacant(entry) => {
+                let contents = fs::read_to_string(path)
+                    .with_context(|| format!("could not read '{}'", path.display()))?;
+                Ok(entry.insert(contents).as_str())
+            }
         }
+    }
 
-        self.contents
-            .get(path)
-            .map(String::as_str)
-            .context("the cached file contents disappeared")
+    /// Release every cached file.
+    ///
+    /// A command that has copied what it needs out of the cache can drop the
+    /// rest before it starts rendering, which keeps a report from holding the
+    /// whole note corpus twice.
+    pub fn clear(&mut self) {
+        self.contents.clear();
     }
 }
 

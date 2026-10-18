@@ -74,8 +74,8 @@ fn run_in(
 
     // Everything that can fail is done before the prompt, so a dossier that
     // cannot take a worklog never costs the user the line they typed.
-    let contents = files.read(&dossier)?.to_owned();
-    if !worklog::has_worklog(&contents) {
+    let contents = files.read(&dossier)?;
+    if !worklog::has_worklog(contents) {
         bail!("'{chosen_shown}' has no '## Worklog' section, so there is nowhere to log this");
     }
 
@@ -116,7 +116,7 @@ fn run_in(
     let dossier_link = format!("../{DOSSIERS_DIR}/{filename}");
     let linked = worklog::add_link(&entry, &name, &dossier_link);
     let entry_link = format!("../{ENTRIES_DIR}/{date}.md");
-    let updated = worklog::append_message(&contents, date, &message, &entry_link)
+    let updated = worklog::append_message(contents, date, &message, &entry_link)
         .with_context(|| format!("'{chosen_shown}' has no '## Worklog' section"))?;
 
     if let Some(linked) = &linked {

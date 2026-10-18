@@ -122,18 +122,18 @@ fn run_in(
     let mut dossiers = Vec::new();
     let mut scope = None;
     for path in &chosen {
-        let contents = files.read(path)?.to_owned();
+        let contents = files.read(path)?;
         let name = worklog::stem(path);
 
         // A filtered report says which dossier it is about, by the name the
         // dossier gives itself rather than the one its file had to take.
         if selected.as_ref() == Some(path) {
-            scope = Some(report::dossier_title(&contents, &name));
+            scope = Some(report::dossier_title(contents, &name));
         }
 
         dossiers.push(Dossier {
             name,
-            days: worklog::worklog_days(&contents),
+            days: worklog::worklog_days(contents),
         });
     }
 
@@ -153,6 +153,10 @@ fn run_in(
             entries.insert(date, files.read(&source.path)?.to_owned());
         }
     }
+
+    // The report has copied the worklog blocks and the period's entries out
+    // of the cache; the full note texts are no longer needed.
+    files.clear();
 
     let input = Input {
         from,

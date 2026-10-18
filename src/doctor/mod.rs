@@ -60,6 +60,7 @@ impl Severity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Check {
     Read,
+    Duplicate,
     Fence,
     Name,
     Encoding,
@@ -189,12 +190,39 @@ pub fn check(input: &Input, lookup: impl Fn(&Path) -> Option<bool>) -> Vec<Findi
     checks::check_case_collisions(dossiers.iter().map(|note| note.path), &mut findings);
     checks::check_case_collisions(entries.iter().map(|entry| entry.note.path), &mut findings);
 
-    let entries_by_date: BTreeMap<NaiveDate, &ParsedEntry<'_>> =
-        entries.iter().map(|entry| (entry.date, entry)).collect();
-    let dossiers_by_name: HashMap<&str, &Parsed<'_>> = dossiers
-        .iter()
-        .map(|dossier| (worklog::dossier_name(dossier.path), dossier))
-        .collect();
+    let mut entries_by_date: BTreeMap<NaiveDate, &ParsedEntry<'_>> = BTreeMap::new();
+    for entry in &entries {
+        if let Some(previous) = entries_by_date.insert(entry.date, entry) {
+            findings.push(Finding::new(
+                entry.note.path,
+                1,
+                Severity::Error,
+                Check::Duplicate,
+                format!(
+                    "entry date {} is also used by '{}'",
+                    entry.date,
+                    previous.note.path.display()
+                ),
+            ));
+        }
+    }
+
+    let mut dossiers_by_name: HashMap<&str, &Parsed<'_>> = HashMap::new();
+    for dossier in &dossiers {
+        let name = worklog::dossier_name(dossier.path);
+        if let Some(previous) = dossiers_by_name.insert(name, dossier) {
+            findings.push(Finding::new(
+                dossier.path,
+                1,
+                Severity::Error,
+                Check::Duplicate,
+                format!(
+                    "dossier name '{name}' is also used by '{}'",
+                    previous.path.display()
+                ),
+            ));
+        }
+    }
 
     let worklogs = worklog::check_worklogs(&dossiers, &entries_by_date, &lookup, &mut findings);
 

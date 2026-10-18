@@ -270,9 +270,9 @@ fn day_heading_line(date: NaiveDate, entry_link: &str) -> String {
 fn link_label(text: &str) -> Option<&str> {
     let (label, after) = text.strip_prefix('[')?.split_once(']')?;
     let rest = after.strip_prefix('(')?;
-    let (target, _) = rest.split_once(')')?;
+    let (target, trailing) = rest.split_once(')')?;
 
-    if target.trim().is_empty() {
+    if !trailing.is_empty() || target.trim().is_empty() {
         return None;
     }
 
@@ -645,6 +645,10 @@ Words.
         assert_eq!(heading_date("### [2026-09-19]\n"), None);
         assert_eq!(heading_date("### [2026-09-19]()\n"), None);
         assert_eq!(heading_date("### [2026-09-19]( )\n"), None);
+        assert_eq!(
+            heading_date("### [2026-09-19](<../entries/2026-09-19.md>) notes\n"),
+            None
+        );
         assert_eq!(heading_date("### Notes\n"), None);
     }
 
