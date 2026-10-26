@@ -3,6 +3,7 @@
 mod cli;
 mod commands;
 mod date;
+mod doctor;
 mod dossier;
 mod git;
 mod prompt;
@@ -25,7 +26,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match commands::run(cli.command) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(error) => {
             let error_palette = style::for_stderr();
             eprintln!("{}", error_palette.error_line(format_args!("{error:?}")));

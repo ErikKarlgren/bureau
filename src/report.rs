@@ -18,7 +18,7 @@ use crate::worklog;
 pub struct Dossier {
     /// The dossier's name: its file name without the extension.
     pub name: String,
-    /// Each `### date` block, in the order it appears in the file.
+    /// Each linked `### date` block, in the order it appears in the file.
     pub days: Vec<(NaiveDate, String)>,
 }
 
@@ -66,7 +66,7 @@ pub enum Changes {
 /// A day is in the report when it has an entry file or a dossier logged work
 /// on it. An entry that renders no bullets still makes the day -- with no work
 /// in it, which the report says out loud rather than printing a bare heading.
-/// Duplicate `### date` headings in one dossier are merged in document order,
+/// Duplicate linked day headings in one dossier are merged in document order,
 /// and a dossier or a day whose worklog holds nothing to print is left out
 /// rather than given an empty heading.
 #[must_use]
@@ -725,8 +725,11 @@ mod tests {
         assert_eq!(days.len(), 1);
         assert_eq!(days.first().unwrap().date, first);
         assert!(days.first().unwrap().has_entry);
-        assert!(days.first().unwrap().entry.is_empty());
-        assert!(days.first().unwrap().dossiers.is_empty());
+        assert_eq!(days.first().unwrap().entry, Vec::<String>::new());
+        assert_eq!(
+            days.first().unwrap().dossiers,
+            Vec::<(String, Vec<String>)>::new()
+        );
         assert!(!has_work(&days));
     }
 
@@ -734,7 +737,7 @@ mod tests {
     fn a_worklog_heading_with_nothing_under_it_makes_no_day() {
         let built = input(vec![dossier("A", &[(date(2026, 9, 20), "")])], &[]);
 
-        assert!(days(&built).is_empty());
+        assert_eq!(days(&built).len(), 0);
     }
 
     #[test]
@@ -806,7 +809,7 @@ mod tests {
     fn a_period_with_no_notes_at_all_has_no_days() {
         let built = input(vec![dossier("A", &[])], &[]);
 
-        assert!(days(&built).is_empty());
+        assert_eq!(days(&built).len(), 0);
     }
 
     #[test]

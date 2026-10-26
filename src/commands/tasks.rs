@@ -1,21 +1,17 @@
 //! `bureau tasks`.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
-use chrono::NaiveDate;
+use anyhow::Result;
 
 use crate::cli::{Filter, TasksArgs};
+use crate::commands::files::Files;
 use crate::commands::paths::ENTRIES_DIR;
 use crate::commands::selection::{self, Request};
 use crate::commands::sources;
 use crate::git;
 use crate::style::{self, Palette};
 use crate::tasks::{Scope, Section, Tree};
-
-/// The date a daily entry is named after, as `YYYY-MM-DD`.
-const DATE_FORMAT: &str = "%Y-%m-%d";
 
 /// How a section announces itself.
 const SECTION_RULE: &str = "===";
@@ -57,13 +53,14 @@ fn run_in(
         menu: args.menu,
     };
     let scope = if args.all { Scope::All } else { Scope::Actions };
+    let mut files = Files::new();
 
     let selected = if request.menu || args.filter.is_some() {
         // `read_dossiers` rather than the raw listing: the picker should offer
         // dossiers in the same order, and with the same sealed ones dropped,
         // as the unfiltered listing and `worklog` do.
         Some(selection::select(
-            &sources::read_dossiers(root)?,
+            &sources::read_dossiers(&mut files, root)?,
             request,
             picker,
         )?)
@@ -71,14 +68,13 @@ fn run_in(
         None
     };
 
-    match selected {
-        Some(dossier) => render_one(&dossier, scope, palette),
-        None => render_all(
-            &read_entries(root)?,
-            &sources::read_dossiers(root)?,
-            scope,
-            palette,
-        ),
+    if let Some(dossier) = selected {
+        render_one(&mut files, &dossier, scope, palette)
+    } else {
+        let entries = read_entries(&mut files, root)?;
+        let dossiers = sources::read_dossiers(&mut files, root)?;
+
+        render_all(&mut files, &entries, &dossiers, scope, palette)
     }
 }
 
@@ -88,6 +84,7 @@ fn run_in(
 /// [`sources::read_dossiers`]: it is the same order `worklog` and the picker
 /// use, and the sealed ones have already been dropped from the list.
 fn render_all(
+    files: &mut Files,
     entries: &[Entry],
     dossiers: &[PathBuf],
     scope: Scope,
@@ -98,11 +95,11 @@ fn render_all(
     // per section.
     let entry_notes: Vec<Note> = entries
         .iter()
-        .map(|entry| Note::read(&entry.path, &entry.heading, palette))
+        .map(|entry| Note::read(files, &entry.path, &entry.heading, palette))
         .collect::<Result<_>>()?;
     let dossier_notes: Vec<Note> = dossiers
         .iter()
-        .map(|dossier| Note::read(dossier, &crate::worklog::stem(dossier), palette))
+        .map(|dossier| Note::read(files, dossier, &crate::worklog::stem(dossier), palette))
         .collect::<Result<_>>()?;
 
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
@@ -133,8 +130,8 @@ fn render_all(
 }
 
 /// The one dossier a filtered run prints.
-fn render_one(path: &Path, scope: Scope, palette: Palette) -> Result<String> {
-    let note = Note::read(path, &crate::worklog::stem(path), palette)?;
+fn render_one(files: &mut Files, path: &Path, scope: Scope, palette: Palette) -> Result<String> {
+    let note = Note::read(files, path, &crate::worklog::stem(path), palette)?;
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
 
     for &section in scope.sections() {
@@ -195,13 +192,12 @@ struct Note {
 
 impl Note {
     /// Read `path` as a note titled `heading`.
-    fn read(path: &Path, heading: &str, palette: Palette) -> Result<Self> {
-        let contents = fs::read_to_string(path)
-            .with_context(|| format!("could not read '{}'", path.display()))?;
+    fn read(files: &mut Files, path: &Path, heading: &str, palette: Palette) -> Result<Self> {
+        let contents = files.read(path)?;
 
         Ok(Self {
             heading: palette.heading().paint(&format!("# {heading}")),
-            tree: Tree::parse(&contents),
+            tree: Tree::parse(contents),
         })
     }
 
@@ -249,26 +245,17 @@ struct Entry {
 /// The date comes from the file name rather than from the filesystem, because
 /// a day is what the entry is about. A file in `entries/` that is not named
 /// after a date is not an entry, and is skipped.
-fn read_entries(root: &Path) -> Result<Vec<Entry>> {
+fn read_entries(files: &mut Files, root: &Path) -> Result<Vec<Entry>> {
     let mut entries = Vec::new();
 
-    for source in sources::read_markdown(root, ENTRIES_DIR)? {
-        let Some(stem) = source
-            .path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(str::to_owned)
-        else {
+    for source in sources::read_markdown(files, root, ENTRIES_DIR)? {
+        let Some(date) = sources::date_of(&source.path) else {
             continue;
         };
 
-        if NaiveDate::parse_from_str(&stem, DATE_FORMAT).is_err() {
-            continue;
-        }
-
         entries.push(Entry {
             path: source.path,
-            heading: format!("{stem} (entry)"),
+            heading: format!("{date} (entry)"),
         });
     }
 
@@ -280,7 +267,10 @@ fn read_entries(root: &Path) -> Result<Vec<Entry>> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::time::{Duration, SystemTime};
+
+    use anyhow::Context;
 
     use super::*;
     use crate::commands::tests::Scratch;

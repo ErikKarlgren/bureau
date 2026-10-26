@@ -7,9 +7,24 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result};
+use chrono::NaiveDate;
 
+use crate::commands::files::Files;
 use crate::commands::paths::DOSSIERS_DIR;
 use crate::style;
+
+/// How a daily entry date is written.
+const DATE_FORMAT: &str = "%Y-%m-%d";
+
+/// The date a file in `entries/` is named after.
+///
+/// A file whose stem is not a `YYYY-MM-DD` date is not an entry.
+#[must_use]
+pub fn date_of(path: &Path) -> Option<NaiveDate> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(|stem| NaiveDate::parse_from_str(stem, DATE_FORMAT).ok())
+}
 
 /// One markdown file in the repository, and whether it is sealed.
 #[derive(Debug)]
@@ -42,7 +57,34 @@ impl Source {
 /// Fails when the directory is there but cannot be read. A file that cannot be
 /// read is skipped with a warning, so one unreadable note does not hide every
 /// other one.
-pub fn read_markdown(root: &Path, directory: &str) -> Result<Vec<Source>> {
+pub fn read_markdown(files: &mut Files, root: &Path, directory: &str) -> Result<Vec<Source>> {
+    let mut sources = Vec::new();
+
+    for path in markdown_paths(root, directory)? {
+        match source_of(files, path) {
+            Ok(source) => sources.push(source),
+            // A permission error, a broken symlink, a directory that happens
+            // to end in `.md`: one bad file must not cost the user the whole
+            // listing. Say what was skipped and carry on.
+            Err(error) => eprintln!(
+                "{}",
+                style::for_stderr().warning_line(format_args!("{error:#}"))
+            ),
+        }
+    }
+
+    Ok(sources)
+}
+
+/// Every `.md` file in `directory`, at the repository root.
+///
+/// A directory that is not there is not an error. The paths are in the
+/// directory order; callers that need an order sort them.
+///
+/// # Errors
+///
+/// Fails when the directory is there but cannot be read.
+pub fn markdown_paths(root: &Path, directory: &str) -> Result<Vec<PathBuf>> {
     let directory = root.join(directory);
     let entries = match fs::read_dir(&directory) {
         Ok(entries) => entries,
@@ -52,36 +94,27 @@ pub fn read_markdown(root: &Path, directory: &str) -> Result<Vec<Source>> {
         }
     };
 
-    let mut sources = Vec::new();
+    let mut paths = Vec::new();
     for entry in entries {
         let path = entry
             .with_context(|| format!("could not read '{}'", directory.display()))?
             .path();
+
         if path.extension().is_some_and(|extension| extension == "md") {
-            match source_of(path) {
-                Ok(source) => sources.push(source),
-                // A permission error, a broken symlink, a directory that
-                // happens to end in `.md`: one bad file must not cost the user
-                // the whole listing. Say what was skipped and carry on.
-                Err(error) => eprintln!(
-                    "{}",
-                    style::for_stderr().warning_line(format_args!("{error:#}"))
-                ),
-            }
+            paths.push(path);
         }
     }
 
-    Ok(sources)
+    Ok(paths)
 }
 
 /// One file as a [`Source`], reading its frontmatter to see whether it is
 /// sealed.
-fn source_of(path: PathBuf) -> Result<Source> {
-    let contents = fs::read_to_string(&path)
-        .with_context(|| format!("could not read '{}'", path.display()))?;
+fn source_of(files: &mut Files, path: PathBuf) -> Result<Source> {
+    let contents = files.read(&path)?;
 
     Ok(Source {
-        sealed: is_sealed(&contents),
+        sealed: is_sealed(contents),
         path,
     })
 }
@@ -120,8 +153,12 @@ pub fn open_paths(sources: &[Source]) -> Vec<PathBuf> {
 ///
 /// Fails when the dossiers directory is there but cannot be read, or when one
 /// of the files cannot be read to check whether it is sealed.
-pub fn read_dossiers(root: &Path) -> Result<Vec<PathBuf>> {
-    Ok(by_recency(open_paths(&read_markdown(root, DOSSIERS_DIR)?)))
+pub fn read_dossiers(files: &mut Files, root: &Path) -> Result<Vec<PathBuf>> {
+    Ok(by_recency(open_paths(&read_markdown(
+        files,
+        root,
+        DOSSIERS_DIR,
+    )?)))
 }
 
 /// Paths sorted most recently modified first, by name within equal times.
@@ -207,6 +244,15 @@ mod tests {
     #[test]
     fn an_unterminated_frontmatter_still_reads() {
         assert!(is_sealed("---\nsealed: 2026-09-21\n"));
+    }
+
+    #[test]
+    fn a_date_comes_from_the_entry_file_stem() {
+        assert_eq!(
+            date_of(Path::new("2026-09-20.md")),
+            NaiveDate::from_ymd_opt(2026, 9, 20)
+        );
+        assert_eq!(date_of(Path::new("notes.md")), None);
     }
 
     #[test]

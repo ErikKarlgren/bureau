@@ -83,8 +83,8 @@ pub fn worklog_days(content: &str) -> Vec<(NaiveDate, String)> {
 /// Returns `None` when there is no `## Worklog` section to add it to. A day
 /// that already has a heading gains another bullet; a new day is inserted so
 /// that the `###` headings stay in date order. Each day heading links to that
-/// day's entry at `entry_link`, and a bare heading left by an older version is
-/// given its link the next time the day is logged.
+/// day's entry at `entry_link`; a day heading without that link is not a day
+/// this function recognises.
 #[must_use]
 pub fn append_message(
     content: &str,
@@ -92,7 +92,7 @@ pub fn append_message(
     message: &str,
     entry_link: &str,
 ) -> Option<String> {
-    let mut lines = to_lines(content);
+    let lines = to_lines(content);
     let (heading, end) = section(&lines, WORKLOG_HEADING)?;
     let first = after(heading);
     let bullet = format!("- {message}\n");
@@ -111,8 +111,6 @@ pub fn append_message(
         }
         return Some(splice(&lines, position, &block));
     };
-
-    link_day_heading(&mut lines, day, &heading_line);
 
     // The new bullet goes after the last bullet of that day only, or straight
     // after the heading when the day has none yet.
@@ -253,11 +251,13 @@ fn sub_section_end(lines: &[String], first: usize, end: usize) -> usize {
         .map_or(end, |offset| first.saturating_add(offset))
 }
 
-/// The date of a `### 2026-09-19` or `### [2026-09-19](<…>)` line, when that is
-/// what the line is.
+/// The date of a `### [2026-09-19](<…>)` line, when that is what the line is.
+///
+/// A bare `### 2026-09-19` is not a day any more: every day heading links to
+/// its entry, so the reader can go from the dossier to the day it describes.
 fn heading_date(line: &str) -> Option<NaiveDate> {
     let text = line.trim_end().strip_prefix("### ")?;
-    let date = link_label(text).unwrap_or(text);
+    let date = link_label(text)?;
     NaiveDate::parse_from_str(date, DATE_FORMAT).ok()
 }
 
@@ -266,32 +266,17 @@ fn day_heading_line(date: NaiveDate, entry_link: &str) -> String {
     format!("### [{date}](<{entry_link}>)\n")
 }
 
-/// Give a bare `### date` heading its link, leaving a heading that already has
-/// one exactly as it is.
-fn link_day_heading(lines: &mut [String], index: usize, heading: &str) {
-    let Some(line) = lines.get_mut(index) else {
-        return;
-    };
-
-    if is_bare_day_heading(line.as_str()) {
-        heading.clone_into(line);
-    }
-}
-
-/// Whether a day heading is missing its link, as in `### 2026-09-19`.
-fn is_bare_day_heading(line: &str) -> bool {
-    let Some(text) = line.trim_end().strip_prefix("### ") else {
-        return false;
-    };
-
-    link_label(text).is_none() && NaiveDate::parse_from_str(text, DATE_FORMAT).is_ok()
-}
-
 /// The label of a `[label](target)` heading, when that is what it is.
 fn link_label(text: &str) -> Option<&str> {
-    text.strip_prefix('[')?
-        .split_once(']')
-        .map(|(label, _)| label)
+    let (label, after) = text.strip_prefix('[')?.split_once(']')?;
+    let rest = after.strip_prefix('(')?;
+    let (target, trailing) = rest.split_once(')')?;
+
+    if !trailing.is_empty() || target.trim().is_empty() {
+        return None;
+    }
+
+    Some(label)
 }
 
 /// The line of the `### date` heading within `first..end`.
@@ -433,7 +418,7 @@ mod tests {
     fn matching_only_looks_at_the_name() {
         let dossiers = vec![dossier("0007 - refactor.md")];
 
-        assert!(matching(&dossiers, "md").is_empty());
+        assert_eq!(matching(&dossiers, "md"), Vec::<std::path::PathBuf>::new());
     }
 
     #[test]
@@ -441,10 +426,10 @@ mod tests {
         let content = "\
 # Fix a thing
 ## Worklog
-### 2024-02-12
+### [2024-02-12](<../entries/2024-02-12.md>)
 - Did something
 
-### 2024-02-16
+### [2024-02-16](<../entries/2024-02-16.md>)
 - Later work
 ";
         let expected = "\
@@ -454,7 +439,7 @@ mod tests {
 - Did something
 - More work
 
-### 2024-02-16
+### [2024-02-16](<../entries/2024-02-16.md>)
 - Later work
 ";
 
@@ -468,7 +453,7 @@ mod tests {
     fn inserts_a_new_day_in_date_order() {
         let content = "\
 ## Worklog
-### 2024-02-12
+### [2024-02-12](<../entries/2024-02-12.md>)
 - First
 
 ### [2024-02-20](<../entries/2024-02-20.md>)
@@ -476,7 +461,7 @@ mod tests {
 ";
         let expected = "\
 ## Worklog
-### 2024-02-12
+### [2024-02-12](<../entries/2024-02-12.md>)
 - First
 
 ### [2024-02-16](<../entries/2024-02-16.md>)
@@ -494,8 +479,8 @@ mod tests {
 
     #[test]
     fn appends_a_new_day_at_the_end_of_the_section() {
-        let content = "## Worklog\n### 2024-02-12\n- First\n";
-        let expected = "## Worklog\n### 2024-02-12\n- First\n\n### [2024-02-14](<../entries/2024-02-14.md>)\n- New\n";
+        let content = "## Worklog\n### [2024-02-12](<../entries/2024-02-12.md>)\n- First\n";
+        let expected = "## Worklog\n### [2024-02-12](<../entries/2024-02-12.md>)\n- First\n\n### [2024-02-14](<../entries/2024-02-14.md>)\n- New\n";
 
         assert_eq!(append(content, date(2024, 2, 14), "New").unwrap(), expected);
     }
@@ -519,7 +504,7 @@ mod tests {
 Words.
 
 ## Worklog
-### 2024-02-12
+### [2024-02-12](<../entries/2024-02-12.md>)
 - Did something
 
 ## Notes
@@ -595,7 +580,7 @@ Words.
 
     #[test]
     fn adds_a_newline_when_the_worklog_does_not_end_with_one() {
-        let content = "## Worklog\n### 2024-02-12\n- Did something";
+        let content = "## Worklog\n### [2024-02-12](<../entries/2024-02-12.md>)\n- Did something";
         let expected = "## Worklog\n### [2024-02-12](<../entries/2024-02-12.md>)\n- Did something\n- More work\n";
 
         assert_eq!(
@@ -651,19 +636,26 @@ Words.
     }
 
     #[test]
-    fn reads_dates_from_bare_and_linked_headings() {
-        assert_eq!(heading_date("### 2026-09-19\n"), Some(date(2026, 9, 19)));
+    fn reads_dates_only_from_linked_headings() {
+        assert_eq!(heading_date("### 2026-09-19\n"), None);
         assert_eq!(
             heading_date("### [2026-09-19](<../entries/2026-09-19.md>)\n"),
             Some(date(2026, 9, 19))
+        );
+        assert_eq!(heading_date("### [2026-09-19]\n"), None);
+        assert_eq!(heading_date("### [2026-09-19]()\n"), None);
+        assert_eq!(heading_date("### [2026-09-19]( )\n"), None);
+        assert_eq!(
+            heading_date("### [2026-09-19](<../entries/2026-09-19.md>) notes\n"),
+            None
         );
         assert_eq!(heading_date("### Notes\n"), None);
     }
 
     #[test]
-    fn a_bare_day_heading_gains_its_link_when_the_day_is_logged_again() {
+    fn a_bare_day_heading_is_ignored_when_the_day_is_logged_again() {
         let content = "## Worklog\n### 2026-09-19\n- killed 3 goblins\n";
-        let expected = "## Worklog\n### [2026-09-19](<../entries/2026-09-19.md>)\n- killed 3 goblins\n- killed 4 goblins\n";
+        let expected = "## Worklog\n### 2026-09-19\n- killed 3 goblins\n\n### [2026-09-19](<../entries/2026-09-19.md>)\n- killed 4 goblins\n";
 
         assert_eq!(
             append(content, date(2026, 9, 19), "killed 4 goblins").unwrap(),
@@ -701,7 +693,7 @@ Words.
 ### [2024-02-12](<../entries/2024-02-12.md>)
 - Did something
 
-### 2024-02-16
+### [2024-02-16](<../entries/2024-02-16.md>)
 - Later work
 ";
         let days = worklog_days(content);
@@ -715,14 +707,17 @@ Words.
 
     #[test]
     fn a_repeated_day_is_returned_twice() {
-        let content = "## Worklog\n### 2024-02-12\n- first\n### 2024-02-12\n- second\n";
+        let content = "## Worklog\n### [2024-02-12](<../entries/2024-02-12.md>)\n- first\n### [2024-02-12](<../entries/2024-02-12.md>)\n- second\n";
 
         assert_eq!(worklog_days(content).len(), 2);
     }
 
     #[test]
     fn a_worklog_less_dossier_has_no_days() {
-        assert!(worklog_days("# A dossier\n## Notes\n- nothing\n").is_empty());
+        assert_eq!(
+            worklog_days("# A dossier\n## Notes\n- nothing\n"),
+            Vec::new()
+        );
     }
 
     #[test]

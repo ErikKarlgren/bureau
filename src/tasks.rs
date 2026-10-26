@@ -521,6 +521,17 @@ fn parse_bullet(tail: &str) -> Bullet {
     }
 }
 
+/// The task marker at the start of a bullet's text, after any leading
+/// whitespace, and the text after it.
+///
+/// This is the marker rule shared with `bureau doctor`; it is deliberately
+/// the same as the one `parse_bullet` uses.
+#[must_use]
+pub fn task_marker(text: &str) -> Option<(State, &str)> {
+    let (_, rest) = split_indent(text);
+    marker(rest)
+}
+
 /// The marker a bullet's text starts with, and the text after it.
 fn marker(rest: &str) -> Option<(State, &str)> {
     let mut characters = rest.chars();
@@ -684,19 +695,31 @@ mod tests {
 
     #[test]
     fn a_marker_only_starts_a_task() {
-        assert!(rendered("- I should check [x] later\n", Section::Finished).is_empty());
+        assert_eq!(
+            rendered("- I should check [x] later\n", Section::Finished),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
     fn an_unknown_symbol_is_prose() {
-        assert!(rendered("- [X] Done\n", Section::Finished).is_empty());
-        assert!(rendered("- [!] Urgent\n", Section::Actionable).is_empty());
+        assert_eq!(
+            rendered("- [X] Done\n", Section::Finished),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            rendered("- [!] Urgent\n", Section::Actionable),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
     fn a_bare_dash_is_nothing() {
-        assert!(rendered("-\n", Section::Actionable).is_empty());
-        assert!(rendered("-   \n", Section::Actionable).is_empty());
+        assert_eq!(rendered("-\n", Section::Actionable), Vec::<String>::new());
+        assert_eq!(
+            rendered("-   \n", Section::Actionable),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -898,7 +921,7 @@ mod tests {
         );
         // The child is blocked too, so it can be neither picked up nor listed
         // as a wait. `--all` is how it gets asked for.
-        assert!(rendered(content, Section::Actionable).is_empty());
+        assert_eq!(rendered(content, Section::Actionable), Vec::<String>::new());
     }
 
     #[test]
@@ -981,12 +1004,18 @@ mod tests {
 
     #[test]
     fn a_cancelled_task_with_unfinished_work_is_not_finished() {
-        assert!(rendered("- [-] Dropped\n  - [ ] Still here\n", Section::Finished).is_empty());
+        assert_eq!(
+            rendered("- [-] Dropped\n  - [ ] Still here\n", Section::Finished),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
     fn a_deep_unfinished_task_excludes_its_whole_chain() {
-        assert!(rendered("- [x] A\n  - [x] B\n    - [ ] C\n", Section::Finished).is_empty());
+        assert_eq!(
+            rendered("- [x] A\n  - [x] B\n    - [ ] C\n", Section::Finished),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -1017,9 +1046,9 @@ mod tests {
     fn a_dossier_with_no_tasks_prints_nothing() {
         let content = "# Notes\n- just a note\n- Another comment\n";
 
-        assert!(rendered(content, Section::Actionable).is_empty());
-        assert!(rendered(content, Section::Blocked).is_empty());
-        assert!(rendered(content, Section::Finished).is_empty());
+        assert_eq!(rendered(content, Section::Actionable), Vec::<String>::new());
+        assert_eq!(rendered(content, Section::Blocked), Vec::<String>::new());
+        assert_eq!(rendered(content, Section::Finished), Vec::<String>::new());
     }
 
     #[test]

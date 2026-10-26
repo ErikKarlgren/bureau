@@ -27,6 +27,8 @@ pub enum Command {
     Tasks(TasksArgs),
     /// Print a report of the work in a period.
     Report(ReportArgs),
+    /// Check the notes for formatting problems.
+    Doctor,
 }
 
 /// What `bureau new` can create.
@@ -176,6 +178,12 @@ mod tests {
                 "{arguments:?} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn doctor_takes_no_arguments() {
+        assert!(parse(&["doctor"]).is_ok());
+        assert!(parse(&["doctor", "extra"]).is_err());
     }
 
     #[test]

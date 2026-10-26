@@ -10,6 +10,7 @@ use dialoguer::Input;
 
 use crate::Result;
 use crate::cli::WorklogArgs;
+use crate::commands::files::Files;
 use crate::commands::paths::{DOSSIERS_DIR, ENTRIES_DIR};
 use crate::commands::{selection, sources};
 use crate::git;
@@ -65,16 +66,16 @@ fn run_in(
     err: &mut impl Write,
 ) -> Result<()> {
     let date = target_date(args.date.as_deref())?;
-    let dossiers = sources::read_dossiers(root)?;
+    let mut files = Files::new();
+    let dossiers = sources::read_dossiers(&mut files, root)?;
     let dossier = select(&dossiers, args)?;
     let name = worklog::stem(&dossier);
     let chosen_shown = sources::relative(&dossier, root).display().to_string();
 
     // Everything that can fail is done before the prompt, so a dossier that
     // cannot take a worklog never costs the user the line they typed.
-    let contents =
-        fs::read_to_string(&dossier).with_context(|| format!("could not read '{chosen_shown}'"))?;
-    if !worklog::has_worklog(&contents) {
+    let contents = files.read(&dossier)?;
+    if !worklog::has_worklog(contents) {
         bail!("'{chosen_shown}' has no '## Worklog' section, so there is nowhere to log this");
     }
 
@@ -115,7 +116,7 @@ fn run_in(
     let dossier_link = format!("../{DOSSIERS_DIR}/{filename}");
     let linked = worklog::add_link(&entry, &name, &dossier_link);
     let entry_link = format!("../{ENTRIES_DIR}/{date}.md");
-    let updated = worklog::append_message(&contents, date, &message, &entry_link)
+    let updated = worklog::append_message(contents, date, &message, &entry_link)
         .with_context(|| format!("'{chosen_shown}' has no '## Worklog' section"))?;
 
     if let Some(linked) = &linked {
