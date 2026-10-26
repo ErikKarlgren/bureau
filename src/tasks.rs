@@ -4,12 +4,15 @@
 //! how a bullet is read, what nests under what, and which nodes a section
 //! keeps -- are tested without touching the filesystem.
 //!
-//! One rule decides every section: *print every node that matches the
-//! section's predicate, and every ancestor of a match*. That is why rendering
-//! is a single filtered walk down the tree rather than three renderers.
+//! A file is first split into an [`Outline`] at its ATX headings, because a
+//! heading is a hard section boundary. Within each section, one rule decides
+//! every state: *print every node that matches the section's predicate, and
+//! every ancestor of a match*. That is why rendering is a single filtered walk
+//! down the tree rather than three renderers.
 
 use std::fmt;
 
+use crate::heading;
 use crate::style::Palette;
 
 /// How many spaces one level of nesting is in the *output*.
@@ -124,6 +127,16 @@ pub enum Section {
 pub enum Scope {
     Actions,
     All,
+}
+
+/// The kind of note a task came from.
+///
+/// Only a couple of display rules differ between a daily entry and a dossier,
+/// but they are the rules that decide whether a template heading is noise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    Entry,
+    Dossier,
 }
 
 impl Scope {
@@ -248,6 +261,12 @@ impl Tree {
         if let Some(parent) = self.nodes.get_mut(parent) {
             parent.children.push(node);
         }
+    }
+
+    /// Whether the file had no bullets at all.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.roots.is_empty()
     }
 
     /// A node's marker.
@@ -454,6 +473,202 @@ impl Tree {
     }
 }
 
+/// A document's task bullets, grouped by the headings above them.
+///
+/// A heading is a hard section boundary: a bullet after it starts a new tree,
+/// however deeply it is indented. That is what lets the heading be printed
+/// without cutting through a task tree, and it is how `bureau report` already
+/// treats an entry's sections.
+#[derive(Debug, Default)]
+pub struct Outline {
+    headings: Vec<Heading>,
+    blocks: Vec<Block>,
+}
+
+/// One heading line, kept as written so the listing can print it verbatim.
+#[derive(Debug)]
+struct Heading {
+    line: String,
+    text: String,
+}
+
+/// The bullets between one heading and the next.
+#[derive(Debug)]
+struct Block {
+    /// The headings this block sits under, outermost first.
+    path: Vec<usize>,
+    tree: Tree,
+}
+
+/// The heading names hidden when they are the only outermost group in a
+/// source and section.
+///
+/// `None` in the first column means every source kind. The table is kept
+/// explicit so adding or removing a case is one line, and the names live in
+/// constants rather than inside a predicate.
+const PENDING: &str = "Pending";
+const COMPLETED: &str = "Completed";
+const NOTES: &str = "Notes";
+
+const HIDDEN_WHEN_ALONE: &[(Option<SourceKind>, Section, &str)] = &[
+    (None, Section::Actionable, PENDING),
+    (None, Section::Blocked, PENDING),
+    (None, Section::Finished, COMPLETED),
+    (Some(SourceKind::Entry), Section::Actionable, NOTES),
+    (Some(SourceKind::Entry), Section::Blocked, NOTES),
+];
+
+/// Whether `heading` is one of the names this source and section hides when it
+/// is the only group left.
+fn hidden_when_alone(kind: SourceKind, section: Section, heading: &str) -> bool {
+    HIDDEN_WHEN_ALONE
+        .iter()
+        .any(|&(source, hidden_section, name)| {
+            let applies_to_kind = source.is_none_or(|source| source == kind);
+
+            applies_to_kind && hidden_section == section && heading.eq_ignore_ascii_case(name)
+        })
+}
+
+impl Outline {
+    /// Read every heading and bullet in `content`.
+    ///
+    /// A level-1 heading is the file's own title and is ignored: the source
+    /// heading already names the file. Every deeper heading starts a section,
+    /// and bullets before the first one belong to the source as a whole.
+    #[must_use]
+    pub fn parse(content: &str) -> Self {
+        let mut outline = Self::default();
+        let mut stack: Vec<(usize, usize)> = Vec::new();
+        let mut path: Vec<usize> = Vec::new();
+        let mut body = String::new();
+
+        for line in content.split_inclusive('\n') {
+            let Some(level) = heading::level(line) else {
+                body.push_str(line);
+                continue;
+            };
+
+            outline.push_block(&mut body, &path);
+
+            if level == 1 {
+                stack.clear();
+                path.clear();
+                continue;
+            }
+
+            stack.retain(|(opened, _)| *opened < level);
+            let index = outline.headings.len();
+            outline.headings.push(Heading {
+                line: line.trim_end_matches(['\r', '\n']).to_owned(),
+                text: heading::text(line, level).unwrap_or("").trim().to_owned(),
+            });
+            stack.push((level, index));
+            path = stack.iter().map(|(_, index)| *index).collect();
+        }
+
+        outline.push_block(&mut body, &path);
+        outline
+    }
+
+    /// File the accumulated body under `path`, dropping an empty one.
+    fn push_block(&mut self, body: &mut String, path: &[usize]) {
+        if body.is_empty() {
+            return;
+        }
+
+        let tree = Tree::parse(body);
+        body.clear();
+        if tree.is_empty() {
+            return;
+        }
+
+        self.blocks.push(Block {
+            path: path.to_vec(),
+            tree,
+        });
+    }
+
+    /// The lines this outline prints for `section`, headings included.
+    ///
+    /// Headings are kept only when they lead to something printed in this
+    /// section, so a section that holds no task under `## foo` never mentions
+    /// `foo`. A heading that only repeats the section's own name is left out
+    /// when it is the sole outermost group; see [`HIDDEN_WHEN_ALONE`].
+    #[must_use]
+    pub fn render(
+        &self,
+        kind: SourceKind,
+        section: Section,
+        scope: Scope,
+        palette: Palette,
+    ) -> Vec<String> {
+        let mut rendered: Vec<(&[usize], Vec<String>)> = Vec::new();
+
+        for block in &self.blocks {
+            let lines = block.tree.render(section, scope, palette);
+            if !lines.is_empty() {
+                rendered.push((block.path.as_slice(), lines));
+            }
+        }
+
+        if rendered.is_empty() {
+            return Vec::new();
+        }
+
+        let mut outermost: Vec<usize> = Vec::new();
+        let mut headingless = false;
+
+        for (path, _) in &rendered {
+            match path.first() {
+                Some(index) => {
+                    if !outermost.contains(index) {
+                        outermost.push(*index);
+                    }
+                }
+                None => headingless = true,
+            }
+        }
+
+        let hidden = match (headingless, outermost.as_slice()) {
+            (false, [index]) => self
+                .headings
+                .get(*index)
+                .filter(|heading| hidden_when_alone(kind, section, &heading.text))
+                .map(|_| *index),
+            _ => None,
+        };
+
+        let mut lines = Vec::new();
+        let mut shown: Vec<usize> = Vec::new();
+
+        for (path, tasks) in rendered {
+            let display: Vec<usize> = path
+                .iter()
+                .copied()
+                .filter(|index| Some(*index) != hidden)
+                .collect();
+            let common = shown
+                .iter()
+                .zip(display.iter())
+                .take_while(|(left, right)| left == right)
+                .count();
+            shown.truncate(common);
+
+            for index in display.iter().skip(common) {
+                if let Some(heading) = self.headings.get(*index) {
+                    lines.push(heading.line.clone());
+                }
+                shown.push(*index);
+            }
+
+            lines.extend(tasks);
+        }
+
+        lines
+    }
+}
+
 /// One bullet's marker and text, as read off a line.
 #[derive(Debug)]
 struct Bullet {
@@ -652,6 +867,21 @@ mod tests {
         Tree::parse(content).render(section, scope, palette)
     }
 
+    /// The lines an outline prints for a section in a plain run.
+    fn outlined(content: &str, kind: SourceKind, section: Section) -> Vec<String> {
+        outlined_with(content, kind, section, Scope::Actions)
+    }
+
+    /// The same, with the scope spelled out.
+    fn outlined_with(
+        content: &str,
+        kind: SourceKind,
+        section: Section,
+        scope: Scope,
+    ) -> Vec<String> {
+        Outline::parse(content).render(kind, section, scope, Palette::OFF)
+    }
+
     /// The lines `section` prints, as owned strings.
     fn lines(lines: &[&str]) -> Vec<String> {
         lines.iter().map(|line| (*line).to_owned()).collect()
@@ -819,6 +1049,206 @@ mod tests {
 
         assert_eq!(rendered(content, Section::Actionable), lines(&["- [ ] A"]));
         assert_eq!(rendered(content, Section::Finished), lines(&["- [x] B"]));
+    }
+
+    #[test]
+    fn an_outline_prints_only_headings_with_tasks_in_the_section() {
+        let content = "\
+# Trip
+## Affected Systems
+- Laptop
+## Pending
+### before the trip
+- [ ] pack
+### during the trip
+- [.] drive
+## Completed
+### before the trip
+- [x] book
+## Worklog
+- a note
+";
+
+        assert_eq!(
+            outlined(content, SourceKind::Dossier, Section::Actionable),
+            lines(&[
+                "### before the trip",
+                "- [ ] pack",
+                "### during the trip",
+                "- [.] drive",
+            ])
+        );
+        assert_eq!(
+            outlined(content, SourceKind::Dossier, Section::Finished),
+            lines(&["### before the trip", "- [x] book"])
+        );
+        assert_eq!(
+            outlined(content, SourceKind::Dossier, Section::Blocked),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn a_note_heading_is_plain_even_with_colour() {
+        let content = "\
+## Pending
+### before the trip
+- [ ] pack
+";
+        let rendered = Outline::parse(content).render(
+            SourceKind::Dossier,
+            Section::Actionable,
+            Scope::Actions,
+            Palette::ON,
+        );
+
+        assert_eq!(
+            rendered,
+            vec![
+                "### before the trip".to_owned(),
+                "- \x1b[34m[ ]\x1b[0m pack".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_second_outermost_group_keeps_a_hidden_heading() {
+        let content = "\
+## Pending
+### before the trip
+- [ ] pack
+## Bugs
+- [ ] fix crash
+";
+
+        assert_eq!(
+            outlined(content, SourceKind::Dossier, Section::Actionable),
+            lines(&[
+                "## Pending",
+                "### before the trip",
+                "- [ ] pack",
+                "## Bugs",
+                "- [ ] fix crash",
+            ])
+        );
+    }
+
+    #[test]
+    fn a_hidden_heading_is_specific_to_its_section() {
+        let pending = "## Pending\n- [x] done\n";
+        assert_eq!(
+            outlined(pending, SourceKind::Dossier, Section::Finished),
+            lines(&["## Pending", "- [x] done"])
+        );
+
+        let completed = "## Completed\n- [ ] misplaced\n";
+        assert_eq!(
+            outlined(completed, SourceKind::Dossier, Section::Actionable),
+            lines(&["## Completed", "- [ ] misplaced"])
+        );
+    }
+
+    #[test]
+    fn the_relevant_heading_differs_per_section() {
+        let content = "\
+## Pending
+### before the trip
+- [ ] pack
+### during the trip
+- [?] wait
+";
+
+        assert_eq!(
+            outlined(content, SourceKind::Dossier, Section::Actionable),
+            lines(&["### before the trip", "- [ ] pack"])
+        );
+        assert_eq!(
+            outlined(content, SourceKind::Dossier, Section::Blocked),
+            lines(&["### during the trip", "- [?] wait"])
+        );
+    }
+
+    #[test]
+    fn notes_are_hidden_only_in_entries() {
+        let single = "## Notes\n- [ ] buy shampoo\n";
+
+        assert_eq!(
+            outlined(single, SourceKind::Entry, Section::Actionable),
+            lines(&["- [ ] buy shampoo"])
+        );
+        assert_eq!(
+            outlined(single, SourceKind::Dossier, Section::Actionable),
+            lines(&["## Notes", "- [ ] buy shampoo"])
+        );
+
+        let multiple = "\
+## Notes
+- [ ] buy shampoo
+## Meeting
+- [ ] prep slides
+";
+        assert_eq!(
+            outlined(multiple, SourceKind::Entry, Section::Actionable),
+            lines(&[
+                "## Notes",
+                "- [ ] buy shampoo",
+                "## Meeting",
+                "- [ ] prep slides",
+            ])
+        );
+    }
+
+    #[test]
+    fn a_heading_is_a_task_boundary() {
+        let content = "\
+- [.] parent
+## Section
+  - [ ] child
+";
+
+        assert_eq!(
+            outlined(content, SourceKind::Dossier, Section::Actionable),
+            lines(&["- [.] parent", "## Section", "- [ ] child"])
+        );
+    }
+
+    #[test]
+    fn tasks_before_the_first_heading_stop_it_being_hidden() {
+        let content = "\
+- [ ] loose
+## Pending
+- [ ] pending
+";
+
+        assert_eq!(
+            outlined(content, SourceKind::Dossier, Section::Actionable),
+            lines(&["- [ ] loose", "## Pending", "- [ ] pending"])
+        );
+    }
+
+    #[test]
+    fn a_heading_with_no_tasks_is_not_printed() {
+        let content = "\
+## Description
+just prose
+## Pending
+- [ ] task
+";
+
+        assert_eq!(
+            outlined(content, SourceKind::Dossier, Section::Actionable),
+            lines(&["- [ ] task"])
+        );
+    }
+
+    #[test]
+    fn a_hidden_heading_is_matched_without_case() {
+        let content = "## pending\n- [ ] task\n";
+
+        assert_eq!(
+            outlined(content, SourceKind::Dossier, Section::Actionable),
+            lines(&["- [ ] task"])
+        );
     }
 
     #[test]

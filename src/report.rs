@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 
+use crate::heading;
 use crate::style::Palette;
 use crate::tasks::Tree;
 use crate::worklog;
@@ -269,7 +270,7 @@ fn title(from: NaiveDate, to: NaiveDate) -> String {
 pub fn dossier_title(content: &str, fallback: &str) -> String {
     content
         .lines()
-        .find_map(|line| heading_text(line, 1))
+        .find_map(|line| heading::text(line, 1))
         .filter(|title| !title.is_empty())
         .map_or_else(|| fallback.to_owned(), str::to_owned)
 }
@@ -293,7 +294,7 @@ fn entry_lines(content: &str) -> Vec<String> {
     let mut body = String::new();
 
     for line in text.split_inclusive('\n') {
-        if let Some(found) = heading_level(line) {
+        if let Some(found) = heading::level(line) {
             flush(&mut lines, &mut pending, level, heading.take(), &body);
             body.clear();
 
@@ -342,31 +343,6 @@ fn flush(
 /// A heading line, one level deeper.
 fn demote(line: &str) -> String {
     format!("#{}", line.trim_end_matches(['\r', '\n']))
-}
-
-/// The level of an ATX heading line, or `None` when the line is not one.
-///
-/// The `#`s have to open the line: an indented heading is read as prose, as is
-/// a run of seven or more, which markdown does not treat as a heading either.
-fn heading_level(line: &str) -> Option<usize> {
-    let hashes = line
-        .len()
-        .saturating_sub(line.trim_start_matches('#').len());
-    if hashes == 0 || hashes > 6 {
-        return None;
-    }
-
-    let rest = line.get(hashes..)?.trim_end_matches(['\r', '\n']);
-    (rest.is_empty() || rest.starts_with(' ')).then_some(hashes)
-}
-
-/// The text of a heading at `level`, without its `#`s.
-fn heading_text(line: &str, level: usize) -> Option<&str> {
-    if heading_level(line) != Some(level) {
-        return None;
-    }
-
-    line.get(level..).map(str::trim)
 }
 
 /// How many backticks a fence around `body` needs.

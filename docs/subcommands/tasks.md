@@ -120,7 +120,8 @@ $ bureau tasks --all
   they are written, so a finished one is a leftover rather than history worth
   keeping a listing of.
 - Each source (entry or dossier) that has something to show is printed once per
-  section, as `# <heading>` followed by its tree.
+  section, as `# <heading>` followed by its tree and any note headings that
+  apply to it.
 - Spacing: a section rule is glued to the first source printed under it; every
   source after that — entry or dossier alike — is set off by one blank line.
   Two blank lines separate the sections, which is what tells a new section from
@@ -130,8 +131,9 @@ $ bureau tasks --all
   name ascending as the tiebreak (a fresh `git clone` stamps every file with
   one time, so the tiebreak decides the whole order there). A dossier whose
   modification time cannot be read sorts after the ones that have one.
-- Headings: an entry is `# YYYY-MM-DD (entry)`, a dossier is its file name
-  without the extension. Entry files never print their own `##` headings.
+- Source headings: an entry is `# YYYY-MM-DD (entry)`, a dossier is its file
+  name without the extension. A note's own `##` and deeper headings print as
+  context where a task under them prints; see [Headings](#headings).
 - Indentation in the output is two spaces per level, regardless of how the
   input was indented.
 - Every printed task keeps **its own marker**, even when that marker does not
@@ -148,13 +150,77 @@ $ bureau tasks --all
   ```
   prints all three lines.
 - Nothing is printed for its own sake. Every line is either a task that belongs
-  to the section or a link in the chain to one, so a sibling of a printed task
-  is never printed just to show that it exists.
+  to the section, a link in the chain to one, or a heading that contains one,
+  so a sibling of a printed task is never printed just to show that it exists.
 - A dossier that only has finished tasks prints nothing without `--all`: its
   non-finished task list is empty, so it has nothing to show. With `--all` it
   prints its closed tasks like any other dossier. This is deliberate: seeing a
   dossier that can be sealed is useful, and it is the pressure that will
   justify `bureau seal` later (see `TASKS.md`).
+
+### Headings
+
+ATX headings from `##` down are part of the listing. A heading prints only in a
+section where a task under it prints: if `## foo` has no blocked task, it does
+not appear under `=== BLOCKED ===`. The source `#` line is not a note heading;
+a level-1 heading in the file is ignored because the source heading already
+names it.
+
+A heading is a hard section boundary. Bullets after it start a new task tree,
+however deeply they are indented, so a heading never appears in the middle of a
+task tree. This is the same rule `bureau report` uses for an entry's sections.
+
+A few template headings are omitted when they are the only outermost group in
+a source and section, because then they do not distinguish where the work
+sits:
+
+| Heading | Hidden when it is the only group in |
+|---|---|
+| `## Pending` | `ACTIONABLE`, `BLOCKED` |
+| `## Completed` | `FINISHED` |
+| `## Notes` | an entry (`ACTIONABLE`, `BLOCKED`) |
+
+The rule is deliberately narrow. It applies only when the heading is the only
+outermost heading with printed tasks and there are no printed tasks outside
+headings. A second group keeps it: `## Pending` prints if `## Bugs` also has
+something to show. Deeper headings (`###`, `####`, …) are never hidden by this
+rule, so a sole `### before the trip` still prints; a dossier's `## Notes` and
+any other heading you add also print even when they are alone. The table is
+`HIDDEN_WHEN_ALONE` in [`src/tasks.rs`](../../src/tasks.rs), so changing the
+convention is one line there. The rows are independent: `## Pending` still
+prints under `FINISHED` when it holds a finished task, because that case is not
+in the table.
+
+For example, with `## Pending` holding two phases and `## Completed` holding
+one:
+
+```markdown
+## Pending
+### before the trip
+- [ ] renew passport
+### during the trip
+- [ ] book restaurant
+
+## Completed
+### before the trip
+- [x] buy suitcase
+```
+
+`bureau tasks --filter trip` prints:
+
+```text
+=== ACTIONABLE ===
+# Trip
+### before the trip
+- [ ] renew passport
+### during the trip
+- [ ] book restaurant
+```
+
+The `## Pending` line is gone, but both phases are kept. With `--all`,
+`FINISHED` prints the completed phase without `## Completed`. Adding
+`## Bugs` with a task brings `## Pending` back, because the two groups now
+distinguish where the work lives.
 
 ### Empty state
 
@@ -187,9 +253,14 @@ emphasis, and prints byte for byte what it printed before colour existed.
 | `[?]` in `BLOCKED` | magenta |
 | `[x]` and `[-]` in `FINISHED` | green |
 | `# <heading>`, entry or dossier | bold, no hue |
+| `## <heading>` and deeper, from the note | plain |
 | every other task line | dim |
 | a bullet with no marker | dim |
 | `No actionable tasks` | plain |
+
+**Only the source heading is bold.** The `# <heading>` line is generated by the
+command and identifies the source; headings from the note are content, so they
+print as written, with no hue or attribute. The `#`s still carry their level.
 
 Three things about that table are worth spelling out.
 
@@ -258,6 +329,31 @@ bullet is treated as prose and ignored. Nothing is reported about it: this is a
 listing, not a linter. `bureau doctor` is where an unrecognised marker is
 reported.
 
+### What counts as a heading
+
+A heading is an ATX heading at column 0:
+
+```text
+^ "#"{1,6} ( " " | end-of-line )
+```
+
+One to six `#`s, then either the end of the line or a space. An indented
+heading, or seven or more `#`s, is prose. Levels may skip: a `####` under a
+`##` is allowed and keeps its own level in the output. The file's own `#` title
+is not a section, because the source heading already names the file.
+
+```markdown
+## Pending
+### before the trip
+- [ ] pack
+```
+
+`## Pending` is a section and `### before the trip` a subsection. A heading
+prints only when a task under it prints in that section; a heading with no task,
+or whose tasks all belong to other sections, is left out entirely. See
+[Headings](#headings) for the generic headings that are hidden when they are
+the only group.
+
 ### What counts as a parent
 
 Nesting comes from comparing indentation, never from a width:
@@ -273,10 +369,11 @@ nest identically, and a file that uses both is read as it looks. Indentation is
 counted in columns, with a tab advancing to the next multiple of 4 so that tabs
 at least compare sensibly against spaces.
 
-Depth is relative, not absolute: the shallowest bullet in a file is a root
-whatever its indentation, whether it sits under `## Notes` or under nothing at
-all. Non-bullet lines are ignored for nesting, so a continuation line under a
-task does not disturb it.
+Depth is relative, not absolute: within one heading section, the shallowest
+bullet is a root whatever its indentation. A heading ends the current section,
+so a bullet after it starts a new tree however deeply it is indented; other
+non-bullet lines are ignored for nesting, so a continuation line under a task
+does not disturb it.
 
 The comparison is what keeps a family of bullets at one indentation flat. Four
 spaces is not "two levels"; it is simply deeper than the bullets above, so both
@@ -383,7 +480,8 @@ readable. A match with no ancestor above it is a line on its own.
 
 The rule never looks sideways and never looks down from an ancestor, and both
 halves show: an ancestor that is only context prints as a single chain down to
-the match, and nothing that is not on such a chain appears at all.
+the match, and nothing that is not on such a chain appears at all. Headings are
+applied after this walk: a heading prints when a line from its subtree survives.
 
 There is one more thing the rule is not free to do, and it is where an
 implementation is most likely to go wrong: `FINISHED` does not walk *through* a
@@ -488,7 +586,8 @@ notes.
 
 | File | Change |
 |---|---|
-| `src/tasks.rs` (new) | markers, indentation, the tree, the predicates, the renderer. Pure functions over `&str`, in the style of `src/worklog.rs` |
+| `src/tasks.rs` (new) | markers, indentation, the tree, headings, the predicates, the renderer. Pure functions over `&str`, in the style of `src/worklog.rs` |
+| `src/heading.rs` (new) | ATX heading parsing, shared with `bureau report` |
 | `src/commands/tasks.rs` (new) | root, file discovery, reading, selection, printing. The `run` / `run_in` split from `src/commands/worklog.rs` |
 | `src/cli.rs` | `Command::Tasks(TasksArgs)` and the args struct |
 | `src/commands/mod.rs` | one `match` arm |
@@ -521,6 +620,10 @@ are only printed as ancestors, so the model already carries what a per-source
 count of each state would need; nothing counts anything in v1
 (`TASKS.md`).
 
+The outline wraps that: a file is split at its headings into blocks, each block
+keeps the heading path above it and its own `Tree`. A heading is a boundary, so
+the tree inside a block never sees a bullet from another block.
+
 ## Tests
 
 ### Pure (`src/tasks.rs`)
@@ -547,6 +650,13 @@ count of each state would need; nothing counts anything in v1
 - Rendering: a fixture holding every branch of the example dossier, compared
   section by section. It is the regression test for the format, and it is the
   test that would have caught printing `- [x] Create tests` under `FINISHED`.
+- Outline: headings print only in the section with a task under them;
+  `## Pending` hides under `ACTIONABLE` and `BLOCKED` but not `FINISHED`;
+  `## Completed` hides under `FINISHED` but not the other sections; `## Notes`
+  hides only in entries; a second outermost group keeps a hidden heading; a
+  `###` heading survives even when it is the only group; a heading is a task
+  boundary; tasks before the first heading keep a sole generic heading visible;
+  and a heading with no printed task is absent.
 - Determinism: two dossiers with one modification time sort by name.
 - Colour in the renderer: a coloured run paints the marker and leaves the text
   alone, dims a line that is only there for context, dims a bullet with no
@@ -574,8 +684,12 @@ count of each state would need; nothing counts anything in v1
   under `BLOCKED` with it.
 - An entry with finished tasks in it prints nothing for them, with `--all` set,
   while its unfinished tasks still print.
+- A dossier's own headings reach the output, with the generic ones hidden when
+  they are the sole group; a dossier keeps `## Notes`; an entry hides
+  `## Notes` while it is alone and shows it when another section has tasks.
 - A coloured run puts the section hue on the section rule, bold on the source
-  heading, the hue on the marker alone, and dim on the line above a match.
+  heading, the hue on the marker alone, and dim on the line above a match;
+  headings from the note stay plain.
 
 `run_in` takes the root, the args and the prompt, so these run against a
 scratch directory. The `Scratch` helper currently lives in
@@ -599,8 +713,11 @@ NO_COLOR=1 cargo run -- tasks       # plain, in a terminal
 ## Out of scope
 
 - Writing, ticking, reordering or editing tasks. `bureau tasks` only reports.
-- An `## Pending` / `## Completed` section convention. Sections are ignored on
-  purpose: entries have tasks too, and the same rule has to work in both.
+- Treating `## Pending` / `## Completed` as task state. Headings are display
+  context only: a task is classified by its marker, so a `[x]` under
+  `## Pending` is still finished and a `[ ]` under `## Completed` is still
+  actionable. The generic headings are hidden only when they are the sole
+  group; they never change what is listed.
 - Sealing dossiers (`TASKS.md`).
 - Styling the rest of the CLI. `bureau tasks` has its own palette (see
   [Colour](#colour)); `bureau report` reuses it for its headings and `bureau

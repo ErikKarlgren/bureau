@@ -6,6 +6,7 @@ mod date;
 mod doctor;
 mod dossier;
 mod git;
+mod heading;
 mod prompt;
 mod report;
 mod style;
