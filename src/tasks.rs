@@ -263,12 +263,6 @@ impl Tree {
         }
     }
 
-    /// Whether the file had no bullets at all.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.roots.is_empty()
-    }
-
     /// A node's marker.
     #[must_use]
     pub fn marker(&self, node: usize) -> Option<State> {
@@ -488,6 +482,8 @@ pub struct Outline {
 /// One heading line, kept as written so the listing can print it verbatim.
 #[derive(Debug)]
 struct Heading {
+    /// The ATX level, which decides whether the heading may be hidden.
+    level: usize,
     line: String,
     text: String,
 }
@@ -505,10 +501,12 @@ struct Block {
 ///
 /// `None` in the first column means every source kind. The table is kept
 /// explicit so adding or removing a case is one line, and the names live in
-/// constants rather than inside a predicate.
+/// constants rather than inside a predicate. Only `##` headings are candidates;
+/// a deeper heading is always kept.
 const PENDING: &str = "Pending";
 const COMPLETED: &str = "Completed";
 const NOTES: &str = "Notes";
+const HIDDEN_LEVEL: usize = 2;
 
 const HIDDEN_WHEN_ALONE: &[(Option<SourceKind>, Section, &str)] = &[
     (None, Section::Actionable, PENDING),
@@ -544,7 +542,7 @@ impl Outline {
         let mut body = String::new();
 
         for line in content.split_inclusive('\n') {
-            let Some(level) = heading::level(line) else {
+            let Some((level, text)) = heading::parse(line) else {
                 body.push_str(line);
                 continue;
             };
@@ -560,8 +558,9 @@ impl Outline {
             stack.retain(|(opened, _)| *opened < level);
             let index = outline.headings.len();
             outline.headings.push(Heading {
+                level,
                 line: line.trim_end_matches(['\r', '\n']).to_owned(),
-                text: heading::text(line, level).unwrap_or("").trim().to_owned(),
+                text: text.to_owned(),
             });
             stack.push((level, index));
             path = stack.iter().map(|(_, index)| *index).collect();
@@ -573,16 +572,13 @@ impl Outline {
 
     /// File the accumulated body under `path`, dropping an empty one.
     fn push_block(&mut self, body: &mut String, path: &[usize]) {
-        if body.is_empty() {
+        if body.trim().is_empty() {
+            body.clear();
             return;
         }
 
         let tree = Tree::parse(body);
         body.clear();
-        if tree.is_empty() {
-            return;
-        }
-
         self.blocks.push(Block {
             path: path.to_vec(),
             tree,
@@ -634,7 +630,9 @@ impl Outline {
             (false, [index]) => self
                 .headings
                 .get(*index)
-                .filter(|heading| hidden_when_alone(kind, section, &heading.text))
+                .filter(|heading| {
+                    heading.level == HIDDEN_LEVEL && hidden_when_alone(kind, section, &heading.text)
+                })
                 .map(|_| *index),
             _ => None,
         };
@@ -1248,6 +1246,59 @@ just prose
         assert_eq!(
             outlined(content, SourceKind::Dossier, Section::Actionable),
             lines(&["- [ ] task"])
+        );
+    }
+
+    #[test]
+    fn a_closing_sequence_does_not_stop_a_heading_being_hidden() {
+        let content = "## Pending ##\n- [ ] task\n";
+
+        assert_eq!(
+            outlined(content, SourceKind::Dossier, Section::Actionable),
+            lines(&["- [ ] task"])
+        );
+    }
+
+    #[test]
+    fn a_deeper_generic_heading_is_not_hidden() {
+        let content = "### Pending\n- [ ] task\n";
+
+        assert_eq!(
+            outlined(content, SourceKind::Dossier, Section::Actionable),
+            lines(&["### Pending", "- [ ] task"])
+        );
+    }
+
+    #[test]
+    fn a_tab_after_the_hashes_still_makes_a_section() {
+        let content = "##\tPending\n###\tbefore\n- [ ] task\n";
+
+        assert_eq!(
+            outlined(content, SourceKind::Dossier, Section::Actionable),
+            lines(&["###\tbefore", "- [ ] task"])
+        );
+    }
+
+    #[test]
+    fn all_scope_prints_the_branch_under_a_wait_beneath_a_hidden_heading() {
+        let content = "\
+## Pending
+- [?] waiting
+  - [ ] branch
+";
+
+        assert_eq!(
+            outlined_with(content, SourceKind::Dossier, Section::Blocked, Scope::All),
+            lines(&["- [?] waiting", "  - [ ] branch"])
+        );
+        assert_eq!(
+            outlined_with(
+                content,
+                SourceKind::Dossier,
+                Section::Blocked,
+                Scope::Actions
+            ),
+            lines(&["- [?] waiting"])
         );
     }
 

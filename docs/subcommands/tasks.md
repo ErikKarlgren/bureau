@@ -334,13 +334,14 @@ reported.
 A heading is an ATX heading at column 0:
 
 ```text
-^ "#"{1,6} ( " " | end-of-line )
+^ "#"{1,6} ( " " | "\t" | end-of-line )
 ```
 
-One to six `#`s, then either the end of the line or a space. An indented
-heading, or seven or more `#`s, is prose. Levels may skip: a `####` under a
-`##` is allowed and keeps its own level in the output. The file's own `#` title
-is not a section, because the source heading already names the file.
+One to six `#`s, then either the end of the line or a space or tab. An indented
+heading, or seven or more `#`s, is prose. An optional closing run of `#`s is not
+part of the heading text. Levels may skip: a `####` under a `##` is allowed and
+keeps its own level in the output. The file's own `#` title is not a section,
+because the source heading already names the file.
 
 ```markdown
 ## Pending
@@ -656,7 +657,9 @@ the tree inside a block never sees a bullet from another block.
   hides only in entries; a second outermost group keeps a hidden heading; a
   `###` heading survives even when it is the only group; a heading is a task
   boundary; tasks before the first heading keep a sole generic heading visible;
-  and a heading with no printed task is absent.
+  a closing `#` run and a tab after the opening `#`s are still the same heading;
+  `--all`'s wider `BLOCKED` branch still hides a sole `## Pending`; and a
+  heading with no printed task is absent.
 - Determinism: two dossiers with one modification time sort by name.
 - Colour in the renderer: a coloured run paints the marker and leaves the text
   alone, dims a line that is only there for context, dims a bullet with no

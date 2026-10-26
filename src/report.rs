@@ -270,7 +270,10 @@ fn title(from: NaiveDate, to: NaiveDate) -> String {
 pub fn dossier_title(content: &str, fallback: &str) -> String {
     content
         .lines()
-        .find_map(|line| heading::text(line, 1))
+        .find_map(|line| match heading::parse(line) {
+            Some((1, text)) => Some(text),
+            _ => None,
+        })
         .filter(|title| !title.is_empty())
         .map_or_else(|| fallback.to_owned(), str::to_owned)
 }
@@ -643,6 +646,11 @@ mod tests {
         let content = "# a::b\n- Creation date: 2026-09-19\n\n## Worklog\n";
 
         assert_eq!(dossier_title(content, "a_b"), "a::b");
+    }
+
+    #[test]
+    fn a_dossier_title_drops_a_closing_hash_run() {
+        assert_eq!(dossier_title("# a ##\n## Worklog\n", "a_b"), "a");
     }
 
     #[test]
