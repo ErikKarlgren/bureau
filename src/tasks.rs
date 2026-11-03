@@ -319,6 +319,92 @@ impl Tree {
 
         false
     }
+
+    /// Calculate exact task statistics without double counting.
+    #[must_use]
+    pub fn stats(&self) -> TaskStats {
+        let mut stats = TaskStats::default();
+
+        for i in 0..self.nodes.len() {
+            if !self.is_task(i) {
+                continue;
+            }
+
+            stats.total = stats.total.saturating_add(1);
+
+            if self.is_finished(i) {
+                if self.marker(i) == Some(State::Done) {
+                    stats.done = stats.done.saturating_add(1);
+                } else if self.marker(i) == Some(State::Cancelled) {
+                    stats.cancelled = stats.cancelled.saturating_add(1);
+                }
+            } else if self.is_open(i) {
+                if self.is_blocked(i) {
+                    stats.blocked = stats.blocked.saturating_add(1);
+                } else {
+                    stats.actionable = stats.actionable.saturating_add(1);
+                }
+            }
+        }
+
+        stats
+    }
+}
+
+/// Statistics about tasks within a tree or collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TaskStats {
+    /// Total count of tasks.
+    pub total: usize,
+    /// Tasks that can be actively worked on (open and not waiting or under wait).
+    pub actionable: usize,
+    /// Tasks that are on wait or blocked by a wait above them.
+    pub blocked: usize,
+    /// Tasks marked done (`[x]`).
+    pub done: usize,
+    /// Tasks marked cancelled (`[-]`).
+    pub cancelled: usize,
+}
+
+impl TaskStats {
+    /// Total completed tasks (done + cancelled).
+    #[must_use]
+    pub const fn completed(&self) -> usize {
+        self.done.saturating_add(self.cancelled)
+    }
+
+    /// Percentage of total tasks that are completed (0 to 100).
+    #[must_use]
+    pub const fn percent_completed(&self) -> usize {
+        match self.completed().saturating_mul(100).checked_div(self.total) {
+            Some(percent) => percent,
+            None => 0,
+        }
+    }
+
+    /// Add other stats into self.
+    pub const fn add(&mut self, other: &Self) {
+        self.total = self.total.saturating_add(other.total);
+        self.actionable = self.actionable.saturating_add(other.actionable);
+        self.blocked = self.blocked.saturating_add(other.blocked);
+        self.done = self.done.saturating_add(other.done);
+        self.cancelled = self.cancelled.saturating_add(other.cancelled);
+    }
+
+    /// Formatted dossier-level summary: e.g. "18/20 done (1 actionable, 1 blocked)"
+    #[must_use]
+    pub fn summary(&self) -> String {
+        if self.total == 0 {
+            return "0 tasks".to_owned();
+        }
+        format!(
+            "{}/{} done ({} actionable, {} blocked)",
+            self.completed(),
+            self.total,
+            self.actionable,
+            self.blocked
+        )
+    }
 }
 
 impl Tree {
@@ -1168,5 +1254,107 @@ mod tests {
         ]);
 
         assert_eq!(Tree::parse(content).render_all(), expected);
+    }
+
+    #[test]
+    fn stats_empty_dataset() {
+        let tree = Tree::parse("");
+        let stats = tree.stats();
+        assert_eq!(stats.total, 0);
+        assert_eq!(stats.actionable, 0);
+        assert_eq!(stats.blocked, 0);
+        assert_eq!(stats.done, 0);
+        assert_eq!(stats.cancelled, 0);
+        assert_eq!(stats.completed(), 0);
+        assert_eq!(stats.percent_completed(), 0);
+        assert_eq!(stats.summary(), "0 tasks");
+    }
+
+    #[test]
+    fn stats_single_task() {
+        let tree = Tree::parse("- [ ] Only one task\n");
+        let stats = tree.stats();
+        assert_eq!(stats.total, 1);
+        assert_eq!(stats.actionable, 1);
+        assert_eq!(stats.blocked, 0);
+        assert_eq!(stats.done, 0);
+        assert_eq!(stats.percent_completed(), 0);
+
+        let tree = Tree::parse("- [x] Done task\n");
+        let stats = tree.stats();
+        assert_eq!(stats.total, 1);
+        assert_eq!(stats.actionable, 0);
+        assert_eq!(stats.done, 1);
+        assert_eq!(stats.percent_completed(), 100);
+
+        let tree = Tree::parse("- [?] Blocked task\n");
+        let stats = tree.stats();
+        assert_eq!(stats.total, 1);
+        assert_eq!(stats.actionable, 0);
+        assert_eq!(stats.blocked, 1);
+        assert_eq!(stats.percent_completed(), 0);
+    }
+
+    #[test]
+    fn stats_nested_tasks_avoid_double_counting() {
+        let input = "
+- [.] Parent in progress
+  - [x] Subtask done
+  - [?] Subtask waiting
+    - [ ] Nested under waiting
+";
+        let tree = Tree::parse(input);
+        let stats = tree.stats();
+        // Total tasks = 4
+        assert_eq!(stats.total, 4);
+        // Actionable = Parent in progress (1)
+        assert_eq!(stats.actionable, 1);
+        // Done = Subtask done (1)
+        assert_eq!(stats.done, 1);
+        // Blocked = Subtask waiting + Nested under waiting (2)
+        assert_eq!(stats.blocked, 2);
+        assert_eq!(stats.cancelled, 0);
+        assert_eq!(stats.completed(), 1);
+        assert_eq!(stats.percent_completed(), 25);
+    }
+
+    #[test]
+    fn stats_ignores_prose_and_invalid_metadata() {
+        let input = "
+# Heading 1
+Some prose without bullet
+- Plain bullet without task marker
+- [-] Cancelled task
+- [x] Done task
+- [?] Waiting task
+- [ ] Todo task
+";
+        let tree = Tree::parse(input);
+        let stats = tree.stats();
+        assert_eq!(stats.total, 4);
+        assert_eq!(stats.actionable, 1);
+        assert_eq!(stats.blocked, 1);
+        assert_eq!(stats.done, 1);
+        assert_eq!(stats.cancelled, 1);
+        assert_eq!(stats.completed(), 2);
+        assert_eq!(stats.percent_completed(), 50);
+        assert_eq!(stats.summary(), "2/4 done (1 actionable, 1 blocked)");
+    }
+
+    #[test]
+    fn stats_addition_aggregates_across_dossiers() {
+        let mut total = TaskStats::default();
+        let tree1 = Tree::parse("- [x] Done 1\n- [ ] Todo 1\n");
+        let tree2 = Tree::parse("- [?] Wait 2\n- [-] Cancel 2\n");
+
+        total.add(&tree1.stats());
+        total.add(&tree2.stats());
+
+        assert_eq!(total.total, 4);
+        assert_eq!(total.done, 1);
+        assert_eq!(total.actionable, 1);
+        assert_eq!(total.blocked, 1);
+        assert_eq!(total.cancelled, 1);
+        assert_eq!(total.percent_completed(), 50);
     }
 }

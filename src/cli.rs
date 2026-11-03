@@ -82,6 +82,10 @@ pub struct TasksArgs {
     /// Also list finished and cancelled dossier tasks
     #[arg(long)]
     pub all: bool,
+
+    /// Show task and dossier completion statistics
+    #[arg(long)]
+    pub stats: bool,
 }
 
 /// Arguments for `bureau report`.

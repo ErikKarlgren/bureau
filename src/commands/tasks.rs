@@ -11,7 +11,7 @@ use crate::commands::selection::{self, Request};
 use crate::commands::sources;
 use crate::git;
 use crate::style::{self, Palette};
-use crate::tasks::{Scope, Section, Tree};
+use crate::tasks::{Scope, Section, TaskStats, Tree};
 
 /// How a section announces itself.
 const SECTION_RULE: &str = "===";
@@ -69,13 +69,39 @@ fn run_in(
     };
 
     if let Some(dossier) = selected {
-        render_one(&mut files, &dossier, scope, palette)
+        render_one(&mut files, &dossier, scope, palette, args.stats)
     } else {
         let entries = read_entries(&mut files, root)?;
         let dossiers = sources::read_dossiers(&mut files, root)?;
 
-        render_all(&mut files, &entries, &dossiers, scope, palette)
+        render_all(&mut files, &entries, &dossiers, scope, palette, args.stats)
     }
+}
+
+/// Overall statistics summary formatted for display.
+fn format_overall_stats(
+    dossier_count: usize,
+    entry_count: usize,
+    total_stats: &TaskStats,
+) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!("Dossiers: {dossier_count} total"));
+    if entry_count > 0 {
+        lines.push(format!("Entries: {entry_count} total"));
+    }
+    if total_stats.total == 0 {
+        lines.push("Tasks: 0 total".to_owned());
+    } else {
+        lines.push(format!(
+            "Tasks: {} total ({} done, {} actionable, {} blocked) — {}% complete",
+            total_stats.total,
+            total_stats.completed(),
+            total_stats.actionable,
+            total_stats.blocked,
+            total_stats.percent_completed()
+        ));
+    }
+    lines.join("\n")
 }
 
 /// Every source, rendered into the sections it has something for.
@@ -89,17 +115,26 @@ fn render_all(
     dossiers: &[PathBuf],
     scope: Scope,
     palette: Palette,
+    show_stats: bool,
 ) -> Result<String> {
     // Read and parse every source once, then draw each section from the same
     // trees: rendering section by section would read and parse a dossier once
     // per section.
     let entry_notes: Vec<Note> = entries
         .iter()
-        .map(|entry| Note::read(files, &entry.path, &entry.heading, palette))
+        .map(|entry| Note::read(files, &entry.path, &entry.heading, palette, show_stats))
         .collect::<Result<_>>()?;
     let dossier_notes: Vec<Note> = dossiers
         .iter()
-        .map(|dossier| Note::read(files, dossier, &crate::worklog::stem(dossier), palette))
+        .map(|dossier| {
+            Note::read(
+                files,
+                dossier,
+                &crate::worklog::stem(dossier),
+                palette,
+                show_stats,
+            )
+        })
         .collect::<Result<_>>()?;
 
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
@@ -126,12 +161,41 @@ fn render_all(
         }
     }
 
-    Ok(assemble(&sections, palette))
+    let stats_block = if show_stats {
+        let mut total_stats = TaskStats::default();
+        for note in &dossier_notes {
+            total_stats.add(&note.tree.stats());
+        }
+        for note in &entry_notes {
+            total_stats.add(&note.tree.stats());
+        }
+        Some(format_overall_stats(
+            dossier_notes.len(),
+            entry_notes.len(),
+            &total_stats,
+        ))
+    } else {
+        None
+    };
+
+    Ok(assemble(&sections, stats_block, palette))
 }
 
 /// The one dossier a filtered run prints.
-fn render_one(files: &mut Files, path: &Path, scope: Scope, palette: Palette) -> Result<String> {
-    let note = Note::read(files, path, &crate::worklog::stem(path), palette)?;
+fn render_one(
+    files: &mut Files,
+    path: &Path,
+    scope: Scope,
+    palette: Palette,
+    show_stats: bool,
+) -> Result<String> {
+    let note = Note::read(
+        files,
+        path,
+        &crate::worklog::stem(path),
+        palette,
+        show_stats,
+    )?;
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
 
     for &section in scope.sections() {
@@ -141,7 +205,13 @@ fn render_one(files: &mut Files, path: &Path, scope: Scope, palette: Palette) ->
         }
     }
 
-    Ok(assemble(&sections, palette))
+    let stats_block = if show_stats {
+        Some(format_overall_stats(1, 0, &note.tree.stats()))
+    } else {
+        None
+    };
+
+    Ok(assemble(&sections, stats_block, palette))
 }
 
 /// The section headings and their trees, spaced so each dossier reads as its
@@ -152,11 +222,11 @@ fn render_one(files: &mut Files, path: &Path, scope: Scope, palette: Palette) ->
 /// the first thing in a section gets none. Sections are told apart by two blank
 /// lines, so the wider gap is what says a new heading has started rather than a
 /// new dossier.
-fn assemble(sections: &[(Section, Vec<String>)], palette: Palette) -> String {
-    if sections.is_empty() {
-        return NOTHING_ACTIONABLE.to_owned();
-    }
-
+fn assemble(
+    sections: &[(Section, Vec<String>)],
+    stats_block: Option<String>,
+    palette: Palette,
+) -> String {
     let mut blocks: Vec<String> = Vec::new();
     for (section, lines) in sections {
         let rule = format!("{SECTION_RULE} {} {SECTION_RULE}", section.heading());
@@ -166,6 +236,16 @@ fn assemble(sections: &[(Section, Vec<String>)], palette: Palette) -> String {
             block.push('\n');
         }
         blocks.push(block);
+    }
+
+    if let Some(stats) = stats_block {
+        let rule = format!("{SECTION_RULE} STATISTICS {SECTION_RULE}");
+        let block = format!("{}\n{stats}\n", palette.heading().paint(&rule));
+        blocks.push(block);
+    }
+
+    if blocks.is_empty() {
+        return NOTHING_ACTIONABLE.to_owned();
     }
 
     let mut listing = blocks.join("\n\n");
@@ -192,12 +272,25 @@ struct Note {
 
 impl Note {
     /// Read `path` as a note titled `heading`.
-    fn read(files: &mut Files, path: &Path, heading: &str, palette: Palette) -> Result<Self> {
+    fn read(
+        files: &mut Files,
+        path: &Path,
+        heading: &str,
+        palette: Palette,
+        show_stats: bool,
+    ) -> Result<Self> {
         let contents = files.read(path)?;
+        let tree = Tree::parse(contents);
+
+        let heading_text = if show_stats {
+            format!("# {heading} ({})", tree.stats().summary())
+        } else {
+            format!("# {heading}")
+        };
 
         Ok(Self {
-            heading: palette.heading().paint(&format!("# {heading}")),
-            tree: Tree::parse(contents),
+            heading: palette.heading().paint(&heading_text),
+            tree,
         })
     }
 
@@ -293,6 +386,7 @@ mod tests {
             filter: None,
             menu: false,
             all,
+            stats: false,
         }
     }
 
@@ -638,6 +732,7 @@ mod tests {
             filter: None,
             menu: true,
             all: false,
+            stats: false,
         };
         let out = run_in(scratch.path(), &menu, Palette::OFF, picked).unwrap();
 
@@ -694,6 +789,7 @@ mod tests {
             filter: Some(Filter::Matching("other".to_owned())),
             menu: false,
             all: false,
+            stats: false,
         };
         let out = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap();
 
@@ -710,6 +806,7 @@ mod tests {
             filter: Some(Filter::Matching("nonsense".to_owned())),
             menu: false,
             all: false,
+            stats: false,
         };
 
         let error = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap_err();
@@ -743,6 +840,7 @@ mod tests {
             filter: Some(Filter::Newest),
             menu: false,
             all: false,
+            stats: false,
         };
         let out = run_in(scratch.path(), &filtered, Palette::OFF, picked).unwrap();
 
@@ -767,6 +865,7 @@ mod tests {
             filter: Some(Filter::Newest),
             menu: false,
             all: false,
+            stats: false,
         };
         let out = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap();
 
@@ -775,5 +874,72 @@ mod tests {
             "expected the newest dossier:\n{out}"
         );
         assert!(!out.contains("refactor auth"), "{out}");
+    }
+
+    #[test]
+    fn tasks_stats_empty_repository() {
+        let scratch = Scratch::new("tasks-stats-empty").unwrap();
+        let mut cli_args = args(false);
+        cli_args.stats = true;
+
+        let out = run_in(scratch.path(), &cli_args, Palette::OFF, no_picker).unwrap();
+        assert!(out.contains("=== STATISTICS ==="), "{out}");
+        assert!(out.contains("Dossiers: 0 total"), "{out}");
+        assert!(out.contains("Tasks: 0 total"), "{out}");
+    }
+
+    #[test]
+    fn tasks_stats_single_dossier() {
+        let scratch = Scratch::new("tasks-stats-single").unwrap();
+        scratch
+            .write(
+                "dossiers/1 - test.md",
+                "# 1 - test\n- [x] Done task\n- [ ] Todo task\n",
+            )
+            .unwrap();
+
+        let mut cli_args = args(false);
+        cli_args.stats = true;
+
+        let out = run_in(scratch.path(), &cli_args, Palette::OFF, no_picker).unwrap();
+        assert!(
+            out.contains("# 1 - test (1/2 done (1 actionable, 0 blocked))"),
+            "{out}"
+        );
+        assert!(out.contains("=== STATISTICS ==="), "{out}");
+        assert!(out.contains("Dossiers: 1 total"), "{out}");
+        assert!(
+            out.contains("Tasks: 2 total (1 done, 1 actionable, 0 blocked) — 50% complete"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn tasks_stats_multiple_dossiers_and_entries() {
+        let scratch = Scratch::new("tasks-stats-multiple").unwrap();
+        scratch
+            .write("dossiers/1 - one.md", "# 1 - one\n- [x] Task 1\n")
+            .unwrap();
+        scratch
+            .write("dossiers/2 - two.md", "# 2 - two\n- [?] Task 2\n")
+            .unwrap();
+        scratch
+            .write(
+                "entries/2026-10-18.md",
+                "# 2026-10-18\n## Notes\n- [ ] Entry task\n",
+            )
+            .unwrap();
+
+        let mut cli_args = args(true);
+        cli_args.stats = true;
+
+        let out = run_in(scratch.path(), &cli_args, Palette::OFF, no_picker).unwrap();
+        assert!(out.contains("=== STATISTICS ==="), "{out}");
+        assert!(out.contains("Dossiers: 2 total"), "{out}");
+        assert!(out.contains("Entries: 1 total"), "{out}");
+        assert!(
+            out.contains("Tasks: 3 total (1 done, 1 actionable, 1 blocked) — 33% complete"),
+            "{out}"
+        );
     }
 }

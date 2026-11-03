@@ -13,7 +13,7 @@ and never commits.
 ## Usage
 
 ```bash
-bureau tasks [--filter [<pattern>]] [--menu] [--all]
+bureau tasks [--filter [<pattern>]] [--menu] [--all] [--stats]
 ```
 
 | Argument | Meaning |
@@ -21,6 +21,7 @@ bureau tasks [--filter [<pattern>]] [--menu] [--all]
 | `--filter [<pattern>]` | With no pattern: the most recently modified dossier. With a pattern: the dossier whose name contains it (case-insensitive). If several match, the same picker `worklog` uses opens. Entries are never included in a filtered run. The pattern is a separate argument, as in `--filter auth`; `--filter` on its own takes the newest dossier. |
 | `--menu` | Open that picker over every dossier instead of filtering. Cannot be combined with `--filter`: the two are mutually exclusive, and the parser rejects them together. |
 | `--all` | Widen the listing to the work there is nothing to do about: the `FINISHED` section, for dossiers only, and the tasks a `[?]` is holding up, in `BLOCKED`. |
+| `--stats` | Show task completion numbers per dossier and append an aggregated `=== STATISTICS ===` summary. |
 
 No arguments: every source, `ACTIONABLE` and `BLOCKED` only, with `BLOCKED`
 holding the `[?]` tasks on their own.
