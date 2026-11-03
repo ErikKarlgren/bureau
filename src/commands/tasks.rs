@@ -52,7 +52,9 @@ fn run_in(
         pattern: args.filter.as_ref().and_then(Filter::pattern),
         menu: args.menu,
     };
-    let scope = if args.all { Scope::All } else { Scope::Actions };
+    let config = crate::config::load_from(root)?;
+    let all = args.all || config.tasks.all;
+    let scope = if all { Scope::All } else { Scope::Actions };
     let mut files = Files::new();
 
     let selected = if request.menu || args.filter.is_some() {
@@ -775,5 +777,25 @@ mod tests {
             "expected the newest dossier:\n{out}"
         );
         assert!(!out.contains("refactor auth"), "{out}");
+    }
+
+    #[test]
+    fn tasks_config_all_shows_finished_tasks_by_default() {
+        let scratch = with_dossier("tasks-config-all");
+        scratch
+            .write(".bureau.toml", "[tasks]\nall = true\n")
+            .unwrap();
+        scratch
+            .write("dossiers/1234 - refactor auth.md", "- [x] finished task\n")
+            .unwrap();
+
+        let args = TasksArgs {
+            filter: None,
+            menu: false,
+            all: false,
+        };
+        let out = run_in(scratch.path(), &args, Palette::OFF, no_picker).unwrap();
+        assert!(out.contains("=== FINISHED ==="), "{out}");
+        assert!(out.contains("- [x] finished task"), "{out}");
     }
 }

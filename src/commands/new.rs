@@ -79,15 +79,12 @@ pub fn entry() -> Result<()> {
         bail!("an entry already exists at '{shown}'");
     }
 
+    let config = crate::config::load_from(&root)?;
+    let entry_template = crate::config::load_entry_template(&root, &config)?;
+    let content = template::render(&entry_template, &[("DATE", &date)]);
+
     println!("{}", created(&shown, style::for_stdout()));
-    write_and_commit(
-        &root,
-        &path,
-        &shown,
-        &template::daily_entry(&date),
-        "entry",
-        "new entry",
-    )
+    write_and_commit(&root, &path, &shown, &content, "entry", "new entry")
 }
 
 /// The answers to the description and link prompts.
@@ -150,9 +147,12 @@ fn run_in(
 
     let (description, link) = answers.read(prompt_palette)?;
 
+    let config = crate::config::load_from(root)?;
+    let dossier_template = crate::config::load_dossier_template(root, &config)?;
+
     let creation_date = now();
     let contents = template::render(
-        template::DOSSIER,
+        &dossier_template,
         &[
             ("DOSSIER_NAME", name.as_str()),
             ("CREATION_DATE", creation_date.as_str()),
@@ -575,5 +575,33 @@ mod tests {
             "{error}"
         );
         assert_eq!(scratch.read("dossiers/1 - here.md").unwrap(), "# Mine\n");
+    }
+
+    #[test]
+    fn custom_dossier_template_from_config_is_rendered() {
+        let scratch = Scratch::new("new-custom-template").unwrap();
+        scratch.init_git();
+        scratch
+            .write(".bureau.toml", "[templates]\ndossier = \"custom.md\"\n")
+            .unwrap();
+        scratch
+            .write(
+                "custom.md",
+                "# Custom: $DOSSIER_NAME\n\nDesc: $DESCRIPTION\n",
+            )
+            .unwrap();
+
+        let base = base(&scratch);
+        run_answers(
+            &scratch,
+            &base,
+            &args("my-dossier"),
+            "Custom description\n.\n\n",
+        )
+        .unwrap();
+
+        let content = scratch.read("dossiers/my-dossier.md").unwrap();
+        assert!(content.contains("# Custom: my-dossier"), "{content}");
+        assert!(content.contains("Desc: Custom description"), "{content}");
     }
 }

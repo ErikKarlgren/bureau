@@ -106,8 +106,8 @@ pub struct ReportArgs {
     pub no_diff: bool,
 
     /// Report format: minimal (dossier names only), worklog (notes and worklogs without diff), full (with diff)
-    #[arg(long = "type", value_enum, default_value_t = ReportType::Full)]
-    pub r#type: ReportType,
+    #[arg(long = "type", value_enum)]
+    pub r#type: Option<ReportType>,
 
     /// Report one dossier whose name matches PATTERN
     #[arg(long, value_name = "PATTERN")]
@@ -213,25 +213,25 @@ mod tests {
         let Command::Report(args) = cli.command else {
             panic!("expected report command");
         };
-        assert_eq!(args.r#type, ReportType::Full);
+        assert_eq!(args.r#type, None);
 
         let cli = parse(&["report", "--type", "minimal"]).unwrap();
         let Command::Report(args) = cli.command else {
             panic!("expected report command");
         };
-        assert_eq!(args.r#type, ReportType::Minimal);
+        assert_eq!(args.r#type, Some(ReportType::Minimal));
 
         let cli = parse(&["report", "--type", "worklog"]).unwrap();
         let Command::Report(args) = cli.command else {
             panic!("expected report command");
         };
-        assert_eq!(args.r#type, ReportType::Worklog);
+        assert_eq!(args.r#type, Some(ReportType::Worklog));
 
         let cli = parse(&["report", "--type", "full"]).unwrap();
         let Command::Report(args) = cli.command else {
             panic!("expected report command");
         };
-        assert_eq!(args.r#type, ReportType::Full);
+        assert_eq!(args.r#type, Some(ReportType::Full));
 
         assert!(parse(&["report", "--type", "invalid"]).is_err());
     }

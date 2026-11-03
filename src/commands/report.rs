@@ -58,12 +58,21 @@ type DiffSection = (Vec<(String, Changes)>, Vec<String>);
 /// report would hold no work at all.
 pub fn run(args: &ReportArgs) -> Result<()> {
     let root = git::toplevel()?;
+    let config = crate::config::load_from(&root)?;
     let today = Local::now().date_naive();
     let palette = style::for_stdout();
 
+    let report_type = args.r#type.unwrap_or_else(|| {
+        config
+            .report
+            .r#type
+            .unwrap_or(crate::report::ReportType::Full)
+    });
+    let no_diff = args.no_diff || config.report.no_diff;
+
     // A report with no diff section touches no commit and no tree, so the
     // repository is not read at all: no HEAD check, no empty tree, no walk.
-    let needs_diff = args.r#type == crate::report::ReportType::Full && !args.no_diff;
+    let needs_diff = report_type == crate::report::ReportType::Full && !no_diff;
     let has_head = if needs_diff {
         git::has_head(&root)?
     } else {
@@ -138,22 +147,19 @@ fn run_in(
         });
     }
 
+    let config = crate::config::load_from(root)?;
+    let report_type = args
+        .r#type
+        .unwrap_or_else(|| config.report.r#type.unwrap_or(report::ReportType::Full));
+    let no_diff = args.no_diff || config.report.no_diff;
+
     // A filtered report is about one dossier, so the day's own notes are left
     // out: they belong to the whole day, not to that dossier.
-    let mut entries = BTreeMap::new();
-    if selected.is_none() {
-        for source in sources::read_markdown(&mut files, root, ENTRIES_DIR)? {
-            let Some(date) = sources::date_of(&source.path) else {
-                continue;
-            };
-
-            if date < from || date > to {
-                continue;
-            }
-
-            entries.insert(date, files.read(&source.path)?.to_owned());
-        }
-    }
+    let entries = if selected.is_none() {
+        read_period_entries(&mut files, root, from, to)?
+    } else {
+        BTreeMap::new()
+    };
 
     // The report has copied the worklog blocks and the period's entries out
     // of the cache; the full note texts are no longer needed.
@@ -166,14 +172,14 @@ fn run_in(
         entries,
     };
     let days = report::days(&input);
-    if !report::has_work_for_type(&days, args.r#type) {
+    if !report::has_work_for_type(&days, report_type) {
         bail!(
             "{}",
             report::nothing_to_report(from, to, selected.is_some(), !input.entries.is_empty())
         );
     }
 
-    let needs_diff = args.r#type == crate::report::ReportType::Full && !args.no_diff;
+    let needs_diff = report_type == report::ReportType::Full && !no_diff;
     let (diffs, warnings) = if needs_diff {
         collect_diffs(&days, &chosen, from, to, today, palette, differ)?
     } else {
@@ -188,10 +194,29 @@ fn run_in(
             &diffs,
             scope.as_deref(),
             palette,
-            args.r#type,
+            report_type,
         ),
         warnings,
     ))
+}
+
+/// Read all entries in the given date range.
+fn read_period_entries(
+    files: &mut Files,
+    root: &Path,
+    from: NaiveDate,
+    to: NaiveDate,
+) -> Result<BTreeMap<NaiveDate, String>> {
+    let mut entries = BTreeMap::new();
+    for source in sources::read_markdown(files, root, ENTRIES_DIR)? {
+        let Some(date) = sources::date_of(&source.path) else {
+            continue;
+        };
+        if date >= from && date <= to {
+            entries.insert(date, files.read(&source.path)?.to_owned());
+        }
+    }
+    Ok(entries)
 }
 
 /// Ask the differ about every dossier in the report, in the order they print.
@@ -521,7 +546,7 @@ mod tests {
             from: Some("2026-09-01".to_owned()),
             to: Some("2026-09-30".to_owned()),
             no_diff: false,
-            r#type: crate::report::ReportType::Full,
+            r#type: None,
             filter: None,
             menu: false,
         }
@@ -994,7 +1019,7 @@ mod tests {
             .unwrap();
 
         let mut test_args = args();
-        test_args.r#type = crate::report::ReportType::Worklog;
+        test_args.r#type = Some(crate::report::ReportType::Worklog);
 
         let (output, warnings) = run_in(
             scratch.path(),
@@ -1024,7 +1049,7 @@ mod tests {
             .unwrap();
 
         let mut test_args = args();
-        test_args.r#type = crate::report::ReportType::Minimal;
+        test_args.r#type = Some(crate::report::ReportType::Minimal);
 
         let (output, warnings) = run_in(
             scratch.path(),
@@ -1055,7 +1080,7 @@ mod tests {
             .unwrap();
 
         let mut test_args = args();
-        test_args.r#type = crate::report::ReportType::Minimal;
+        test_args.r#type = Some(crate::report::ReportType::Minimal);
 
         let result = run_in(
             scratch.path(),
@@ -1067,5 +1092,98 @@ mod tests {
         );
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn report_uses_configured_report_type_when_cli_flag_omitted() {
+        let scratch = with_dossier("report-config-type");
+        scratch
+            .write(".bureau.toml", "[report]\ntype = \"minimal\"\n")
+            .unwrap();
+        scratch
+            .write(
+                "entries/2026-09-20.md",
+                "# 2026-09-20\n\n## Notes\n- [ ] entry note\n\n## Worked on Dossiers\n\
+                 - [A](<../dossiers/A.md>)\n",
+            )
+            .unwrap();
+
+        let (output, warnings) = run_in(
+            scratch.path(),
+            &args(),
+            Palette::OFF,
+            today(),
+            &named,
+            no_picker,
+        )
+        .unwrap();
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        // Config set type to minimal, so notes, tasks and diff are omitted:
+        assert!(output.contains("## 2026-09-20 (Sunday)\n- A\n"), "{output}");
+        assert!(!output.contains("entry note"), "{output}");
+        assert!(!output.contains("## Git diff"), "{output}");
+    }
+
+    #[test]
+    fn report_cli_flag_overrides_configured_report_type() {
+        let scratch = with_dossier("report-config-override");
+        scratch
+            .write(".bureau.toml", "[report]\ntype = \"minimal\"\n")
+            .unwrap();
+        scratch
+            .write(
+                "entries/2026-09-20.md",
+                "# 2026-09-20\n\n## Notes\n- [ ] entry note\n\n## Worked on Dossiers\n\
+                 - [A](<../dossiers/A.md>)\n",
+            )
+            .unwrap();
+
+        let mut test_args = args();
+        test_args.r#type = Some(crate::report::ReportType::Worklog);
+
+        let (output, warnings) = run_in(
+            scratch.path(),
+            &test_args,
+            Palette::OFF,
+            today(),
+            &named,
+            no_picker,
+        )
+        .unwrap();
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        // CLI overrode minimal with worklog, so notes are present:
+        assert!(output.contains("### Notes\n- [ ] entry note"), "{output}");
+        assert!(output.contains("### A\n- did A"), "{output}");
+        assert!(!output.contains("## Git diff"), "{output}");
+    }
+
+    #[test]
+    fn report_uses_configured_no_diff() {
+        let scratch = with_dossier("report-config-no-diff");
+        scratch
+            .write(".bureau.toml", "[report]\nno_diff = true\n")
+            .unwrap();
+        scratch
+            .write(
+                "entries/2026-09-20.md",
+                "# 2026-09-20\n\n## Notes\n- [ ] entry note\n\n## Worked on Dossiers\n\
+                 - [A](<../dossiers/A.md>)\n",
+            )
+            .unwrap();
+
+        let (output, warnings) = run_in(
+            scratch.path(),
+            &args(),
+            Palette::OFF,
+            today(),
+            &named,
+            no_picker,
+        )
+        .unwrap();
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(!output.contains("## Git diff"), "{output}");
     }
 }

@@ -2,6 +2,7 @@
 
 mod cli;
 mod commands;
+mod config;
 mod date;
 mod doctor;
 mod dossier;
