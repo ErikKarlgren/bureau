@@ -302,6 +302,28 @@ fn parse_walk(bytes: &[u8]) -> Result<HashMap<String, String>> {
     Ok(newest)
 }
 
+/// The contents of `path` at `commit`, or `None` if the file did not exist or cannot be read.
+///
+/// # Errors
+///
+/// Fails when git cannot be executed or path is not UTF-8.
+pub fn show_file(root: &Path, commit: &str, path: &Path) -> Result<Option<String>> {
+    let rel = relative(root, path);
+    let path_str = rel.to_str().context("path is not valid UTF-8")?;
+    let target = format!("{commit}:{path_str}");
+    let output = Command::new("git")
+        .args(["show", &target])
+        .current_dir(root)
+        .output()
+        .context("could not run git")?;
+
+    if output.status.success() {
+        Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
+    } else {
+        Ok(None)
+    }
+}
+
 /// The hash of the empty tree, in whatever object format the repository uses.
 ///
 /// A dossier created inside the period has no commit before `--from` to diff

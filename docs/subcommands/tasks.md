@@ -13,7 +13,7 @@ and never commits.
 ## Usage
 
 ```bash
-bureau tasks [--filter [<pattern>]] [--menu] [--all]
+bureau tasks [--filter [<pattern>]] [--menu] [--all] [--no-subtasks]
 ```
 
 | Argument | Meaning |
@@ -21,6 +21,7 @@ bureau tasks [--filter [<pattern>]] [--menu] [--all]
 | `--filter [<pattern>]` | With no pattern: the most recently modified dossier. With a pattern: the dossier whose name contains it (case-insensitive). If several match, the same picker `worklog` uses opens. Entries are never included in a filtered run. The pattern is a separate argument, as in `--filter auth`; `--filter` on its own takes the newest dossier. |
 | `--menu` | Open that picker over every dossier instead of filtering. Cannot be combined with `--filter`: the two are mutually exclusive, and the parser rejects them together. |
 | `--all` | Widen the listing to the work there is nothing to do about: the `FINISHED` section, for dossiers only, and the tasks a `[?]` is holding up, in `BLOCKED`. |
+| `--no-subtasks` | Show dossiers and their statuses without listing their nested subtasks (alias `--no-tasks`). |
 
 No arguments: every source, `ACTIONABLE` and `BLOCKED` only, with `BLOCKED`
 holding the `[?]` tasks on their own.
@@ -110,6 +111,16 @@ $ bureau tasks --all
 
 - Sections print in the order `ACTIONABLE`, `BLOCKED`, `FINISHED`. A section with
   nothing in it is not printed at all.
+- Global dossier states (`active`, `on hold`, `done`, `archived`) set in frontmatter
+  govern which sections a dossier belongs to:
+  - An `on hold` dossier is never printed under `ACTIONABLE`; it appears under
+    `BLOCKED` accompanied by its hold reason.
+  - A `done` or `archived` dossier never appears under `ACTIONABLE` or `BLOCKED`;
+    it appears under `FINISHED` only when `--all` is requested.
+  - Dossiers that have not been updated recently emit a warning on stderr (14 days
+    for active dossiers, 30 days for on-hold dossiers).
+- `--no-subtasks` (alias `--no-tasks`) lists the dossiers and their statuses in
+  each section without printing their individual task trees.
 - `--all` widens `BLOCKED` as well as adding `FINISHED`: a `[?]` is listed on
   its own, and the work it is holding up is listed under it. A `[?]` nested
   further down is a wait in its own right, so it is listed either way, together

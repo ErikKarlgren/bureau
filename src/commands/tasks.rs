@@ -3,12 +3,14 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use chrono::{Local, NaiveDate};
 
 use crate::cli::{Filter, TasksArgs};
 use crate::commands::files::Files;
 use crate::commands::paths::ENTRIES_DIR;
 use crate::commands::selection::{self, Request};
 use crate::commands::sources;
+use crate::dossier::{self, DossierStatus};
 use crate::git;
 use crate::style::{self, Palette};
 use crate::tasks::{Scope, Section, Tree};
@@ -29,10 +31,14 @@ const NOTHING_ACTIONABLE: &str = "No actionable tasks";
 /// either way: this command only reports.
 pub fn run(args: &TasksArgs) -> Result<()> {
     let root = git::toplevel()?;
-    println!(
-        "{}",
-        run_in(&root, args, style::for_stdout(), selection::pick)?
-    );
+    let today = Local::now().date_naive();
+    let (output, warnings) =
+        run_in_with_warnings(&root, args, style::for_stdout(), today, selection::pick)?;
+    let warning_palette = style::for_stderr();
+    for warning in &warnings {
+        eprintln!("{}", warning_palette.warning_line(warning));
+    }
+    println!("{output}");
     Ok(())
 }
 
@@ -42,12 +48,26 @@ pub fn run(args: &TasksArgs) -> Result<()> {
 ///
 /// The picker is only consulted for `--filter` and `--menu`, which are also
 /// the only ways to leave the entries out of a run.
+#[cfg(test)]
 fn run_in(
     root: &Path,
     args: &TasksArgs,
     palette: Palette,
     picker: impl Fn(&[PathBuf]) -> Result<PathBuf>,
 ) -> Result<String> {
+    let today = Local::now().date_naive();
+    let (output, _) = run_in_with_warnings(root, args, palette, today, picker)?;
+    Ok(output)
+}
+
+/// Run tasks inspection and return both the output string and any staleness warnings.
+fn run_in_with_warnings(
+    root: &Path,
+    args: &TasksArgs,
+    palette: Palette,
+    today: NaiveDate,
+    picker: impl Fn(&[PathBuf]) -> Result<PathBuf>,
+) -> Result<(String, Vec<String>)> {
     let request = Request {
         pattern: args.filter.as_ref().and_then(Filter::pattern),
         menu: args.menu,
@@ -68,14 +88,44 @@ fn run_in(
         None
     };
 
-    if let Some(dossier) = selected {
-        render_one(&mut files, &dossier, scope, palette)
+    let mut warnings = Vec::new();
+
+    let output = if let Some(dossier) = selected {
+        if let Ok(contents) = files.read(&dossier) {
+            let status = DossierStatus::from_contents(contents);
+            if let Some(warning) =
+                dossier::check_staleness(&dossier, contents, today, &status, None, None)
+            {
+                warnings.push(warning.message());
+            }
+        }
+        render_one(&mut files, &dossier, scope, palette, args.no_subtasks)?
     } else {
         let entries = read_entries(&mut files, root)?;
         let dossiers = sources::read_dossiers(&mut files, root)?;
 
-        render_all(&mut files, &entries, &dossiers, scope, palette)
-    }
+        for dossier in &dossiers {
+            if let Ok(contents) = files.read(dossier) {
+                let status = DossierStatus::from_contents(contents);
+                if let Some(warning) =
+                    dossier::check_staleness(dossier, contents, today, &status, None, None)
+                {
+                    warnings.push(warning.message());
+                }
+            }
+        }
+
+        render_all(
+            &mut files,
+            &entries,
+            &dossiers,
+            scope,
+            palette,
+            args.no_subtasks,
+        )?
+    };
+
+    Ok((output, warnings))
 }
 
 /// Every source, rendered into the sections it has something for.
@@ -89,17 +139,18 @@ fn render_all(
     dossiers: &[PathBuf],
     scope: Scope,
     palette: Palette,
+    no_subtasks: bool,
 ) -> Result<String> {
     // Read and parse every source once, then draw each section from the same
     // trees: rendering section by section would read and parse a dossier once
     // per section.
     let entry_notes: Vec<Note> = entries
         .iter()
-        .map(|entry| Note::read(files, &entry.path, &entry.heading, palette))
+        .map(|entry| Note::read(files, &entry.path, &entry.heading, false))
         .collect::<Result<_>>()?;
     let dossier_notes: Vec<Note> = dossiers
         .iter()
-        .map(|dossier| Note::read(files, dossier, &crate::worklog::stem(dossier), palette))
+        .map(|dossier| Note::read(files, dossier, &crate::worklog::stem(dossier), true))
         .collect::<Result<_>>()?;
 
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
@@ -114,11 +165,11 @@ fn render_all(
         // the wider `BLOCKED` that `--all` asks for covers both.
         if section != Section::Finished {
             for note in &entry_notes {
-                push_source(&mut lines, note.lines(section, scope, palette));
+                push_source(&mut lines, note.lines(section, scope, palette, no_subtasks));
             }
         }
         for note in &dossier_notes {
-            push_source(&mut lines, note.lines(section, scope, palette));
+            push_source(&mut lines, note.lines(section, scope, palette, no_subtasks));
         }
 
         if !lines.is_empty() {
@@ -130,12 +181,18 @@ fn render_all(
 }
 
 /// The one dossier a filtered run prints.
-fn render_one(files: &mut Files, path: &Path, scope: Scope, palette: Palette) -> Result<String> {
-    let note = Note::read(files, path, &crate::worklog::stem(path), palette)?;
+fn render_one(
+    files: &mut Files,
+    path: &Path,
+    scope: Scope,
+    palette: Palette,
+    no_subtasks: bool,
+) -> Result<String> {
+    let note = Note::read(files, path, &crate::worklog::stem(path), true)?;
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
 
     for &section in scope.sections() {
-        let lines = note.lines(section, scope, palette);
+        let lines = note.lines(section, scope, palette, no_subtasks);
         if !lines.is_empty() {
             sections.push((section, lines));
         }
@@ -184,34 +241,129 @@ fn assemble(sections: &[(Section, Vec<String>)], palette: Palette) -> String {
 
 /// One note, read and parsed once so every section draws from the same tree.
 struct Note {
-    /// The heading as it prints, already painted.
-    heading: String,
+    /// The heading as it prints, without '# ' and without colour.
+    title: String,
     /// Everything the file has to say about tasks.
     tree: Tree,
+    /// Status when the note is a dossier.
+    status: Option<DossierStatus>,
 }
 
 impl Note {
-    /// Read `path` as a note titled `heading`.
-    fn read(files: &mut Files, path: &Path, heading: &str, palette: Palette) -> Result<Self> {
+    /// Read `path` as a note titled `title`.
+    fn read(files: &mut Files, path: &Path, title: &str, is_dossier: bool) -> Result<Self> {
         let contents = files.read(path)?;
+        let status = if is_dossier {
+            Some(DossierStatus::from_contents(contents))
+        } else {
+            None
+        };
 
         Ok(Self {
-            heading: palette.heading().paint(&format!("# {heading}")),
+            title: title.to_owned(),
             tree: Tree::parse(contents),
+            status,
         })
     }
 
     /// The lines this note prints in `section`, empty when it prints none.
-    fn lines(&self, section: Section, scope: Scope, palette: Palette) -> Vec<String> {
-        let lines = self.tree.render(section, scope, palette);
-        if lines.is_empty() {
-            return lines;
-        }
+    fn lines(
+        &self,
+        section: Section,
+        scope: Scope,
+        palette: Palette,
+        no_subtasks: bool,
+    ) -> Vec<String> {
+        let Some(status) = &self.status else {
+            // Daily entry: never appears in Finished
+            if section == Section::Finished {
+                return Vec::new();
+            }
+            let subtasks = self.tree.render(section, scope, palette);
+            if subtasks.is_empty() {
+                return Vec::new();
+            }
+            let header = palette.heading().paint(&format!("# {}", self.title));
+            if no_subtasks {
+                return vec![header];
+            }
+            let mut shown = Vec::with_capacity(subtasks.len().saturating_add(1));
+            shown.push(header);
+            shown.extend(subtasks);
+            return shown;
+        };
 
-        let mut shown = Vec::with_capacity(lines.len().saturating_add(1));
-        shown.push(self.heading.clone());
-        shown.extend(lines);
-        shown
+        match status {
+            DossierStatus::OnHold { .. } => {
+                // An on-hold dossier is not actionable
+                if section == Section::Actionable {
+                    return Vec::new();
+                }
+                if section == Section::Blocked {
+                    let header = palette.heading().paint(&format!(
+                        "# {} ({})",
+                        self.title,
+                        status.display()
+                    ));
+                    if no_subtasks {
+                        return vec![header];
+                    }
+                    let subtasks = self.tree.render(section, scope, palette);
+                    let mut shown = Vec::with_capacity(subtasks.len().saturating_add(1));
+                    shown.push(header);
+                    shown.extend(subtasks);
+                    return shown;
+                }
+                if section == Section::Finished && scope == Scope::All {
+                    let subtasks = self.tree.render(section, scope, palette);
+                    if subtasks.is_empty() {
+                        return Vec::new();
+                    }
+                    let header = palette.heading().paint(&format!("# {}", self.title));
+                    if no_subtasks {
+                        return vec![header];
+                    }
+                    let mut shown = Vec::with_capacity(subtasks.len().saturating_add(1));
+                    shown.push(header);
+                    shown.extend(subtasks);
+                    return shown;
+                }
+                Vec::new()
+            }
+            DossierStatus::Done | DossierStatus::Archived { .. } => {
+                if section != Section::Finished || scope != Scope::All {
+                    return Vec::new();
+                }
+                let header =
+                    palette
+                        .heading()
+                        .paint(&format!("# {} ({})", self.title, status.display()));
+                if no_subtasks {
+                    vec![header]
+                } else {
+                    let subtasks = self.tree.render(section, scope, palette);
+                    let mut shown = Vec::with_capacity(subtasks.len().saturating_add(1));
+                    shown.push(header);
+                    shown.extend(subtasks);
+                    shown
+                }
+            }
+            DossierStatus::Active => {
+                let subtasks = self.tree.render(section, scope, palette);
+                if subtasks.is_empty() {
+                    return Vec::new();
+                }
+                let header = palette.heading().paint(&format!("# {}", self.title));
+                if no_subtasks {
+                    vec![header]
+                } else {
+                    let mut shown = Vec::with_capacity(subtasks.len().saturating_add(1));
+                    shown.push(header);
+                    shown.extend(subtasks);
+                    shown
+                }
+            }
+        }
     }
 }
 
@@ -293,6 +445,7 @@ mod tests {
             filter: None,
             menu: false,
             all,
+            no_subtasks: false,
         }
     }
 
@@ -638,6 +791,7 @@ mod tests {
             filter: None,
             menu: true,
             all: false,
+            no_subtasks: false,
         };
         let out = run_in(scratch.path(), &menu, Palette::OFF, picked).unwrap();
 
@@ -694,6 +848,7 @@ mod tests {
             filter: Some(Filter::Matching("other".to_owned())),
             menu: false,
             all: false,
+            no_subtasks: false,
         };
         let out = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap();
 
@@ -710,6 +865,7 @@ mod tests {
             filter: Some(Filter::Matching("nonsense".to_owned())),
             menu: false,
             all: false,
+            no_subtasks: false,
         };
 
         let error = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap_err();
@@ -743,6 +899,7 @@ mod tests {
             filter: Some(Filter::Newest),
             menu: false,
             all: false,
+            no_subtasks: false,
         };
         let out = run_in(scratch.path(), &filtered, Palette::OFF, picked).unwrap();
 
@@ -767,6 +924,7 @@ mod tests {
             filter: Some(Filter::Newest),
             menu: false,
             all: false,
+            no_subtasks: false,
         };
         let out = run_in(scratch.path(), &filtered, Palette::OFF, no_picker).unwrap();
 
@@ -775,5 +933,98 @@ mod tests {
             "expected the newest dossier:\n{out}"
         );
         assert!(!out.contains("refactor auth"), "{out}");
+    }
+
+    #[test]
+    fn on_hold_dossier_is_excluded_from_actionable_and_included_in_blocked() {
+        let scratch = Scratch::new("tasks-on-hold").unwrap();
+        scratch
+            .write(
+                "dossiers/1 - onhold.md",
+                "---\nstatus: on hold: waiting for QA\n---\n# 1 - onhold\n- [ ] todo item\n",
+            )
+            .unwrap();
+
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+        assert!(!out.contains("=== ACTIONABLE ==="), "{out}");
+        assert!(out.contains("=== BLOCKED ==="), "{out}");
+        assert!(
+            out.contains("# 1 - onhold (on hold: waiting for QA)"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn done_dossier_is_only_in_finished_with_all() {
+        let scratch = Scratch::new("tasks-done-status").unwrap();
+        scratch
+            .write(
+                "dossiers/1 - done.md",
+                "---\nstatus: done\n---\n# 1 - done\n- [x] completed task\n",
+            )
+            .unwrap();
+
+        let normal = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+        assert_eq!(normal, NOTHING_ACTIONABLE);
+
+        let with_all = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
+        assert!(with_all.contains("=== FINISHED ==="), "{with_all}");
+        assert!(with_all.contains("# 1 - done (done)"), "{with_all}");
+    }
+
+    #[test]
+    fn no_subtasks_flag_omits_subtask_bullets() {
+        let scratch = Scratch::new("tasks-no-subtasks").unwrap();
+        scratch
+            .write(
+                "dossiers/1 - active.md",
+                "---\nstatus: active\n---\n# 1 - active\n- [ ] do the thing\n",
+            )
+            .unwrap();
+        scratch
+            .write(
+                "dossiers/2 - onhold.md",
+                "---\nstatus: on hold: waiting on team\n---\n# 2 - onhold\n- [ ] blocked thing\n",
+            )
+            .unwrap();
+
+        let mut cli_args = args(false);
+        cli_args.no_subtasks = true;
+
+        let out = run_in(scratch.path(), &cli_args, Palette::OFF, no_picker).unwrap();
+        assert!(out.contains("=== ACTIONABLE ==="), "{out}");
+        assert!(out.contains("# 1 - active"), "{out}");
+        assert!(!out.contains("- [ ] do the thing"), "{out}");
+
+        assert!(out.contains("=== BLOCKED ==="), "{out}");
+        assert!(
+            out.contains("# 2 - onhold (on hold: waiting on team)"),
+            "{out}"
+        );
+        assert!(!out.contains("- [ ] blocked thing"), "{out}");
+    }
+
+    #[test]
+    fn staleness_warnings_are_emitted_for_inactive_dossiers() {
+        let scratch = Scratch::new("tasks-staleness").unwrap();
+        scratch
+            .write(
+                "dossiers/1 - stale.md",
+                "## Worklog\n### [2026-09-01](<../entries/2026-09-01.md>)\n- worked\n",
+            )
+            .unwrap();
+
+        let today = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        let (_out, warnings) =
+            run_in_with_warnings(scratch.path(), &args(false), Palette::OFF, today, no_picker)
+                .unwrap();
+
+        assert!(!warnings.is_empty(), "expected staleness warning");
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("1 - stale") && w.contains("30 days")),
+            "{warnings:?}"
+        );
     }
 }

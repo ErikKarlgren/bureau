@@ -121,18 +121,30 @@ fn run_in(
 
     let mut dossiers = Vec::new();
     let mut scope = None;
+    let has_head = git::has_head(root).unwrap_or(false);
     for path in &chosen {
         let contents = files.read(path)?;
         let name = worklog::stem(path);
 
+        let status_annotation = dossier_status_annotation(root, path, contents, from, has_head);
+
+        let reported_name = status_annotation.as_ref().map_or_else(
+            || name.clone(),
+            |annotation| format!("{name} ({annotation})"),
+        );
+
         // A filtered report says which dossier it is about, by the name the
         // dossier gives itself rather than the one its file had to take.
         if selected.as_ref() == Some(path) {
-            scope = Some(report::dossier_title(contents, &name));
+            let base_title = report::dossier_title(contents, &name);
+            scope = Some(status_annotation.as_ref().map_or_else(
+                || base_title.clone(),
+                |annotation| format!("{base_title} ({annotation})"),
+            ));
         }
 
         dossiers.push(Dossier {
-            name,
+            name: reported_name,
             days: worklog::worklog_days(contents),
         });
     }
@@ -182,6 +194,36 @@ fn run_in(
         report::render(from, to, &days, &diffs, scope.as_deref(), palette),
         warnings,
     ))
+}
+
+/// Lifecycle status annotation for a dossier, or `None` when default active.
+fn dossier_status_annotation(
+    root: &Path,
+    path: &Path,
+    contents: &str,
+    from: NaiveDate,
+    has_head: bool,
+) -> Option<String> {
+    let (current_status, is_explicit) =
+        crate::dossier::DossierStatus::from_contents_with_explicit(contents);
+
+    let initial_status = if has_head {
+        git::last_commits(root, from, [path])
+            .ok()
+            .and_then(|commits| commits.values().next().cloned())
+            .and_then(|commit| git::show_file(root, &commit, path).ok().flatten())
+            .map(|old_content| crate::dossier::DossierStatus::from_contents(&old_content))
+    } else {
+        None
+    };
+
+    match initial_status {
+        Some(initial) if initial != current_status => {
+            Some(format!("{} -> {}", initial.label(), current_status.label()))
+        }
+        _ if is_explicit => Some(current_status.label().to_owned()),
+        _ => None,
+    }
 }
 
 /// Ask the differ about every dossier in the report, in the order they print.
@@ -969,5 +1011,25 @@ mod tests {
         assert!(output.contains("day note"), "{output}");
         assert!(!output.contains("did A"), "{output}");
         assert!(!output.contains("### A"), "{output}");
+    }
+
+    #[test]
+    fn a_dossier_with_status_is_reported_with_status() {
+        let scratch = Scratch::new("report-status").unwrap();
+        scratch
+            .write(
+                "dossiers/A.md",
+                "---\nstatus: on hold: waiting on team\n---\n## Worklog\n### [2026-09-20](<../entries/2026-09-20.md>)\n- worked on A\n",
+            )
+            .unwrap();
+        scratch
+            .write(
+                "entries/2026-09-20.md",
+                "# 2026-09-20\n\n## Notes\n- note\n\n## Worked on Dossiers\n- [A](<../dossiers/A.md>)\n",
+            )
+            .unwrap();
+
+        let (output, _) = run_report(&scratch, &args()).unwrap();
+        assert!(output.contains("### A (on hold)"), "{output}");
     }
 }

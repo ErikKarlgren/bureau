@@ -82,6 +82,10 @@ pub struct TasksArgs {
     /// Also list finished and cancelled dossier tasks
     #[arg(long)]
     pub all: bool,
+
+    /// Show dossiers without listing their subtasks
+    #[arg(long, aliases = ["no-tasks"])]
+    pub no_subtasks: bool,
 }
 
 /// Arguments for `bureau report`.

@@ -1,6 +1,10 @@
 //! Turning a dossier name into a file name.
 
 use sanitise_file_name::{Options, sanitise_with_options};
+use std::fs;
+use std::path::Path;
+
+use chrono::{DateTime, Local, NaiveDate};
 
 /// The extension every dossier file gets, appended after sanitisation.
 const EXTENSION: &str = ".md";
@@ -84,6 +88,252 @@ pub fn name_to_filename(name: &str) -> String {
     let mut filename = sanitise_with_options(name, &OPTIONS);
     filename.push_str(EXTENSION);
     filename
+}
+
+/// Global lifecycle state of a dossier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DossierStatus {
+    /// Dossier is actively worked on.
+    Active,
+    /// Dossier is on hold pending an external factor or blocker (requires a reason).
+    OnHold { reason: String },
+    /// Dossier's goals are fully met.
+    Done,
+    /// Dossier is archived/cancelled (requires a reason).
+    Archived { reason: String },
+}
+
+impl DossierStatus {
+    /// Whether the dossier is in active state.
+    #[must_use]
+    pub const fn is_active(&self) -> bool {
+        matches!(self, Self::Active)
+    }
+
+    /// Whether the dossier is on hold.
+    #[must_use]
+    pub const fn is_on_hold(&self) -> bool {
+        matches!(self, Self::OnHold { .. })
+    }
+
+    /// Whether the dossier is marked done.
+    #[must_use]
+    pub const fn is_done(&self) -> bool {
+        matches!(self, Self::Done)
+    }
+
+    /// Whether the dossier is archived.
+    #[must_use]
+    pub const fn is_archived(&self) -> bool {
+        matches!(self, Self::Archived { .. })
+    }
+
+    /// Short label for the status.
+    #[must_use]
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::OnHold { .. } => "on hold",
+            Self::Done => "done",
+            Self::Archived { .. } => "archived",
+        }
+    }
+
+    /// Human-readable representation including any reason.
+    #[must_use]
+    pub fn display(&self) -> String {
+        match self {
+            Self::Active => "active".to_owned(),
+            Self::OnHold { reason } => {
+                if reason.is_empty() {
+                    "on hold".to_owned()
+                } else {
+                    format!("on hold: {reason}")
+                }
+            }
+            Self::Done => "done".to_owned(),
+            Self::Archived { reason } => {
+                if reason.is_empty() {
+                    "archived".to_owned()
+                } else {
+                    format!("archived: {reason}")
+                }
+            }
+        }
+    }
+
+    /// Parse dossier status from markdown contents.
+    #[must_use]
+    pub fn from_contents(contents: &str) -> Self {
+        Self::from_contents_with_explicit(contents).0
+    }
+
+    /// Parse dossier status and whether it was explicitly specified in frontmatter.
+    #[must_use]
+    pub fn from_contents_with_explicit(contents: &str) -> (Self, bool) {
+        let mut lines = contents.lines();
+        if lines.next().map(str::trim_end) != Some("---") {
+            return (Self::Active, false);
+        }
+
+        let mut status_raw: Option<String> = None;
+        let mut reason_raw: Option<String> = None;
+        let mut sealed_date: Option<String> = None;
+
+        for line in lines.take_while(|line| line.trim_end() != "---") {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("status:") {
+                status_raw = Some(rest.trim().to_owned());
+            } else if let Some(rest) = trimmed.strip_prefix("reason:") {
+                reason_raw = Some(rest.trim().to_owned());
+            } else if let Some(rest) = trimmed.strip_prefix("sealed:") {
+                sealed_date = Some(rest.trim().to_owned());
+            }
+        }
+
+        if let Some(raw) = status_raw {
+            let lower = raw.to_ascii_lowercase();
+            if lower == "active" {
+                return (Self::Active, true);
+            }
+            if lower == "done" {
+                return (Self::Done, true);
+            }
+            if lower.starts_with("on hold")
+                || lower.starts_with("on_hold")
+                || lower.starts_with("on-hold")
+            {
+                let reason = if let Some((_, r)) = raw.split_once(':') {
+                    r.trim().to_owned()
+                } else {
+                    reason_raw.unwrap_or_default()
+                };
+                return (Self::OnHold { reason }, true);
+            }
+            if lower.starts_with("archived") || lower.starts_with("archive") {
+                let reason = if let Some((_, r)) = raw.split_once(':') {
+                    r.trim().to_owned()
+                } else {
+                    reason_raw.unwrap_or_default()
+                };
+                return (Self::Archived { reason }, true);
+            }
+        }
+
+        if let Some(date) = sealed_date {
+            return (
+                Self::Archived {
+                    reason: format!("sealed: {date}"),
+                },
+                true,
+            );
+        }
+
+        (Self::Active, false)
+    }
+}
+
+/// Staleness information about a dossier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StalenessWarning {
+    pub dossier_name: String,
+    pub status: DossierStatus,
+    pub days_inactive: i64,
+}
+
+impl StalenessWarning {
+    #[must_use]
+    pub fn message(&self) -> String {
+        match &self.status {
+            DossierStatus::Active => {
+                format!(
+                    "dossier '{}' is active but has not been updated in {} days",
+                    self.dossier_name, self.days_inactive
+                )
+            }
+            DossierStatus::OnHold { reason } => {
+                if reason.is_empty() {
+                    format!(
+                        "dossier '{}' is on hold but has not been updated in {} days",
+                        self.dossier_name, self.days_inactive
+                    )
+                } else {
+                    format!(
+                        "dossier '{}' is on hold ({reason}) and has not been updated in {} days",
+                        self.dossier_name, self.days_inactive
+                    )
+                }
+            }
+            _ => format!(
+                "dossier '{}' has not been updated in {} days",
+                self.dossier_name, self.days_inactive
+            ),
+        }
+    }
+}
+
+/// Determine if a dossier is stale based on its last update date and its state.
+///
+/// An active dossier is stale if not updated in 14 days (or custom threshold).
+/// An on-hold dossier is stale if not updated in 30 days (or custom threshold).
+/// Done and Archived dossiers are not considered stale.
+#[must_use]
+pub fn check_staleness(
+    path: &Path,
+    contents: &str,
+    today: NaiveDate,
+    status: &DossierStatus,
+    active_threshold: Option<i64>,
+    on_hold_threshold: Option<i64>,
+) -> Option<StalenessWarning> {
+    if status.is_done() || status.is_archived() {
+        return None;
+    }
+
+    let active_limit = active_threshold.unwrap_or(14);
+    let on_hold_limit = on_hold_threshold.unwrap_or(30);
+
+    // Latest date in worklog:
+    let worklog_days = crate::worklog::worklog_days(contents);
+    let last_worklog_date = worklog_days.iter().map(|(date, _)| *date).max();
+
+    // Modification date from file metadata if available
+    let mtime_date = fs::metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .map(|mtime| {
+            let dt: DateTime<Local> = mtime.into();
+            dt.date_naive()
+        });
+
+    let latest_date = last_worklog_date.or(mtime_date);
+
+    let latest = latest_date?;
+
+    let diff = today.signed_duration_since(latest);
+    let days = diff.num_days();
+
+    let is_stale = if status.is_active() {
+        days >= active_limit
+    } else if status.is_on_hold() {
+        days >= on_hold_limit
+    } else {
+        false
+    };
+
+    if is_stale {
+        let dossier_name = path.file_stem().map_or_else(
+            || "unnamed".to_owned(),
+            |s| s.to_string_lossy().into_owned(),
+        );
+        Some(StalenessWarning {
+            dossier_name,
+            status: status.clone(),
+            days_inactive: days,
+        })
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -177,5 +427,140 @@ mod portability_tests {
     fn the_length_limit_is_the_full_file_name() {
         assert!(!is_portable_filename(&format!("{}.md", "a".repeat(253))));
         assert!(is_portable_filename(&format!("{}.md", "a".repeat(252))));
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    #[test]
+    fn default_status_is_active() {
+        assert_eq!(DossierStatus::from_contents(""), DossierStatus::Active);
+        assert_eq!(
+            DossierStatus::from_contents("# Title\n- [ ] task\n"),
+            DossierStatus::Active
+        );
+        assert_eq!(
+            DossierStatus::from_contents("---\ncreated: 2026-09-01\n---\n# Title"),
+            DossierStatus::Active
+        );
+    }
+
+    #[test]
+    fn parses_active_status() {
+        let content = "---\nstatus: active\n---\n# Title";
+        assert_eq!(DossierStatus::from_contents(content), DossierStatus::Active);
+        assert!(DossierStatus::from_contents(content).is_active());
+        assert_eq!(DossierStatus::from_contents(content).label(), "active");
+        assert_eq!(DossierStatus::from_contents(content).display(), "active");
+    }
+
+    #[test]
+    fn parses_done_status() {
+        let content = "---\nstatus: done\n---\n# Title";
+        assert_eq!(DossierStatus::from_contents(content), DossierStatus::Done);
+        assert!(DossierStatus::from_contents(content).is_done());
+        assert_eq!(DossierStatus::from_contents(content).label(), "done");
+        assert_eq!(DossierStatus::from_contents(content).display(), "done");
+    }
+
+    #[test]
+    fn parses_on_hold_status_with_inline_reason() {
+        let content = "---\nstatus: on hold: waiting for backend\n---\n# Title";
+        let status = DossierStatus::from_contents(content);
+        assert_eq!(
+            status,
+            DossierStatus::OnHold {
+                reason: "waiting for backend".to_owned()
+            }
+        );
+        assert!(status.is_on_hold());
+        assert_eq!(status.label(), "on hold");
+        assert_eq!(status.display(), "on hold: waiting for backend");
+    }
+
+    #[test]
+    fn parses_on_hold_status_with_separate_reason_field() {
+        let content = "---\nstatus: on hold\nreason: blocked by security audit\n---\n# Title";
+        let status = DossierStatus::from_contents(content);
+        assert_eq!(
+            status,
+            DossierStatus::OnHold {
+                reason: "blocked by security audit".to_owned()
+            }
+        );
+        assert_eq!(status.display(), "on hold: blocked by security audit");
+    }
+
+    #[test]
+    fn parses_archived_status_with_reason() {
+        let content = "---\nstatus: archived: superseded by v2\n---\n# Title";
+        let status = DossierStatus::from_contents(content);
+        assert_eq!(
+            status,
+            DossierStatus::Archived {
+                reason: "superseded by v2".to_owned()
+            }
+        );
+        assert!(status.is_archived());
+        assert_eq!(status.label(), "archived");
+        assert_eq!(status.display(), "archived: superseded by v2");
+    }
+
+    #[test]
+    fn parses_sealed_as_archived() {
+        let content = "---\nsealed: 2026-09-20\n---\n# Title";
+        let status = DossierStatus::from_contents(content);
+        assert_eq!(
+            status,
+            DossierStatus::Archived {
+                reason: "sealed: 2026-09-20".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn staleness_detects_inactive_active_dossier() {
+        let scratch = crate::commands::tests::Scratch::new("staleness-test").unwrap();
+        let path = scratch.path().join("dossier.md");
+        let content = "## Worklog\n### [2026-09-01](<../entries/2026-09-01.md>)\n- worked\n";
+        fs::write(&path, content).unwrap();
+
+        let today = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        let warning = check_staleness(
+            &path,
+            content,
+            today,
+            &DossierStatus::Active,
+            Some(14),
+            Some(30),
+        );
+        assert!(warning.is_some());
+        let warning = warning.unwrap();
+        assert_eq!(warning.days_inactive, 30);
+        assert!(warning.message().contains("30 days"));
+    }
+
+    #[test]
+    fn staleness_ignores_done_and_archived_dossiers() {
+        let path = Path::new("test.md");
+        let content = "## Worklog\n### [2026-01-01](<../entries/2026-01-01.md>)\n";
+        let today = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+
+        assert!(check_staleness(path, content, today, &DossierStatus::Done, None, None).is_none());
+        assert!(
+            check_staleness(
+                path,
+                content,
+                today,
+                &DossierStatus::Archived {
+                    reason: "old".to_owned()
+                },
+                None,
+                None
+            )
+            .is_none()
+        );
     }
 }
