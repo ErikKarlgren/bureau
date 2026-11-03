@@ -350,7 +350,7 @@ mod tests {
         assert!(!out.contains("=== FINISHED ==="), "{out}");
         assert!(out.contains("# 1234 - refactor auth\n"), "{out}");
         assert!(out.contains("- [o] Split auth.rs\n"), "{out}");
-        assert!(out.contains("  - [?] API: waiting on John\n"), "{out}");
+        assert!(out.contains("  - [?] API: waiting on John"), "{out}");
         assert!(
             out.contains("- [x] Create tests\n  - [o] Data structures\n"),
             "{out}"
@@ -380,8 +380,7 @@ mod tests {
 === BLOCKED ===
 # 1234 - refactor auth
 - [o] Split auth.rs
-  - [?] API: waiting on John
-- [x] Create tests"
+  - [?] API: waiting on John"
         );
     }
 

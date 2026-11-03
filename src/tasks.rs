@@ -429,18 +429,8 @@ impl Tree {
             return false;
         }
 
-        if self.is_finished(node) {
-            if section == Section::Finished {
-                return false;
-            }
-
-            let Some(current) = self.nodes.get(node) else {
-                return false;
-            };
-
-            return current.children.iter().any(|child| {
-                self.is_open(*child) || self.leads_to_a_match(*child, section, scope)
-            });
+        if self.is_finished(node) && section == Section::Finished {
+            return false;
         }
 
         let Some(current) = self.nodes.get(node) else {
@@ -930,6 +920,70 @@ mod tests {
         let pending = lines(&["- [o] Split auth.rs", "  - [ ] Logic"]);
 
         assert_eq!(rendered(content, Section::Actionable), pending);
+    }
+
+    #[test]
+    fn completed_parent_with_waiting_child_does_not_appear_in_actionable() {
+        // Issue #1: A completed task [x] should not appear in ACTIONABLE merely
+        // because it has a child node with [?].
+        let content = "\
+- [o] Active parent
+  - [x] Completed task with waiting child
+    - [?] Waiting blocker
+  - [ ] Actionable sibling
+";
+        let expected_actionable = lines(&["- [o] Active parent", "  - [ ] Actionable sibling"]);
+        assert_eq!(rendered(content, Section::Actionable), expected_actionable);
+
+        let expected_blocked = lines(&[
+            "- [o] Active parent",
+            "  - [x] Completed task with waiting child",
+            "    - [?] Waiting blocker",
+        ]);
+        assert_eq!(rendered(content, Section::Blocked), expected_blocked);
+    }
+
+    #[test]
+    fn top_level_completed_task_with_waiting_child_does_not_appear_in_actionable() {
+        let content = "- [x] Done\n  - [?] Blocked\n";
+        assert_eq!(rendered(content, Section::Actionable), Vec::<String>::new());
+        assert_eq!(
+            rendered(content, Section::Blocked),
+            lines(&["- [x] Done", "  - [?] Blocked"])
+        );
+    }
+
+    #[test]
+    fn multi_level_completed_ancestors_with_only_waiting_descendants_excluded_from_actionable() {
+        let content = "\
+- [x] Completed grandparent
+  - [x] Completed parent
+    - [?] Blocked leaf
+";
+        assert_eq!(rendered(content, Section::Actionable), Vec::<String>::new());
+        assert_eq!(
+            rendered(content, Section::Blocked),
+            lines(&[
+                "- [x] Completed grandparent",
+                "  - [x] Completed parent",
+                "    - [?] Blocked leaf",
+            ])
+        );
+    }
+
+    #[test]
+    fn completed_parent_with_both_actionable_and_waiting_children_prints_only_actionable_branch_in_actionable()
+     {
+        let content = "\
+- [x] Completed parent
+  - [?] Waiting child
+  - [ ] Actionable child
+";
+        let expected_actionable = lines(&["- [x] Completed parent", "  - [ ] Actionable child"]);
+        assert_eq!(rendered(content, Section::Actionable), expected_actionable);
+
+        let expected_blocked = lines(&["- [x] Completed parent", "  - [?] Waiting child"]);
+        assert_eq!(rendered(content, Section::Blocked), expected_blocked);
     }
 
     #[test]
