@@ -12,6 +12,7 @@
 
 use std::fmt;
 
+use crate::fence::Fence;
 use crate::heading;
 use crate::style::Palette;
 
@@ -208,7 +209,8 @@ impl Tree {
     ///
     /// Non-bullet lines are ignored, including `##` headings, so the same
     /// rules work in a dossier and in a daily entry with no section
-    /// convention to maintain.
+    /// convention to maintain. A fenced code block is skipped whole: its
+    /// bullets are examples, not work.
     #[must_use]
     pub fn parse(content: &str) -> Self {
         let mut tree = Self::default();
@@ -217,8 +219,21 @@ impl Tree {
         // strictly increases, which is what makes "deeper than the one before
         // it" the only way to nest.
         let mut open: Vec<(usize, usize)> = Vec::new();
+        let mut fence: Option<Fence> = None;
 
         for line in content.lines() {
+            if let Some(open_fence) = fence {
+                if open_fence.closes(line) {
+                    fence = None;
+                }
+                continue;
+            }
+
+            if let Some(open_fence) = Fence::opening(line) {
+                fence = Some(open_fence);
+                continue;
+            }
+
             let Some((bullet, indent)) = parse_line(line) else {
                 continue;
             };
@@ -1633,6 +1648,24 @@ just prose
     fn render_all_prints_every_bullet_in_document_order_and_plain() {
         let content = "- prose\n  - [ ] todo\n- [x] done\n    - [o] almost\n";
         let expected = lines(&["- prose", "  - [ ] todo", "- [x] done", "  - [o] almost"]);
+
+        assert_eq!(Tree::parse(content).render_all(), expected);
+    }
+
+    #[test]
+    fn fenced_examples_are_not_tasks() {
+        let content = "\
+- [ ] real
+```markdown
+- [ ] example
+  - [x] nested example
+```
+- [x] also real
+~~~
+- [?] tilde example
+~~~
+";
+        let expected = lines(&["- [ ] real", "- [x] also real"]);
 
         assert_eq!(Tree::parse(content).render_all(), expected);
     }

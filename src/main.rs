@@ -5,6 +5,7 @@ mod commands;
 mod date;
 mod doctor;
 mod dossier;
+mod fence;
 mod git;
 mod heading;
 mod prompt;
