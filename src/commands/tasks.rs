@@ -11,7 +11,7 @@ use crate::commands::selection::{self, Request};
 use crate::commands::sources;
 use crate::git;
 use crate::style::{self, Palette};
-use crate::tasks::{Scope, Section, Tree};
+use crate::tasks::{Outline, Scope, Section, SourceKind};
 
 /// How a section announces itself.
 const SECTION_RULE: &str = "===";
@@ -95,11 +95,27 @@ fn render_all(
     // per section.
     let entry_notes: Vec<Note> = entries
         .iter()
-        .map(|entry| Note::read(files, &entry.path, &entry.heading, palette))
+        .map(|entry| {
+            Note::read(
+                files,
+                &entry.path,
+                &entry.heading,
+                SourceKind::Entry,
+                palette,
+            )
+        })
         .collect::<Result<_>>()?;
     let dossier_notes: Vec<Note> = dossiers
         .iter()
-        .map(|dossier| Note::read(files, dossier, &crate::worklog::stem(dossier), palette))
+        .map(|dossier| {
+            Note::read(
+                files,
+                dossier,
+                &crate::worklog::stem(dossier),
+                SourceKind::Dossier,
+                palette,
+            )
+        })
         .collect::<Result<_>>()?;
 
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
@@ -131,7 +147,13 @@ fn render_all(
 
 /// The one dossier a filtered run prints.
 fn render_one(files: &mut Files, path: &Path, scope: Scope, palette: Palette) -> Result<String> {
-    let note = Note::read(files, path, &crate::worklog::stem(path), palette)?;
+    let note = Note::read(
+        files,
+        path,
+        &crate::worklog::stem(path),
+        SourceKind::Dossier,
+        palette,
+    )?;
     let mut sections: Vec<(Section, Vec<String>)> = Vec::new();
 
     for &section in scope.sections() {
@@ -182,28 +204,37 @@ fn assemble(sections: &[(Section, Vec<String>)], palette: Palette) -> String {
     listing
 }
 
-/// One note, read and parsed once so every section draws from the same tree.
+/// One note, read and parsed once so every section draws from the same outline.
 struct Note {
     /// The heading as it prints, already painted.
     heading: String,
-    /// Everything the file has to say about tasks.
-    tree: Tree,
+    /// Everything the file has to say about tasks, by heading.
+    outline: Outline,
+    /// Whether the note is an entry or a dossier.
+    kind: SourceKind,
 }
 
 impl Note {
     /// Read `path` as a note titled `heading`.
-    fn read(files: &mut Files, path: &Path, heading: &str, palette: Palette) -> Result<Self> {
+    fn read(
+        files: &mut Files,
+        path: &Path,
+        heading: &str,
+        kind: SourceKind,
+        palette: Palette,
+    ) -> Result<Self> {
         let contents = files.read(path)?;
 
         Ok(Self {
             heading: palette.heading().paint(&format!("# {heading}")),
-            tree: Tree::parse(contents),
+            outline: Outline::parse(contents),
+            kind,
         })
     }
 
     /// The lines this note prints in `section`, empty when it prints none.
     fn lines(&self, section: Section, scope: Scope, palette: Palette) -> Vec<String> {
-        let lines = self.tree.render(section, scope, palette);
+        let lines = self.outline.render(self.kind, section, scope, palette);
         if lines.is_empty() {
             return lines;
         }
@@ -408,6 +439,106 @@ mod tests {
                  # 1234 - refactor auth\n"
             ),
             "{out}"
+        );
+    }
+
+    #[test]
+    fn dossier_headings_are_printed_without_the_template_ones() {
+        let scratch = Scratch::new("tasks-dossier-headings").unwrap();
+        scratch
+            .write(
+                "dossiers/1 - trip.md",
+                "\
+# 1 - trip
+## Pending
+### before the trip
+- [ ] pack
+### during the trip
+- [ ] drive
+- [?] wait
+## Completed
+### before the trip
+- [x] book
+",
+            )
+            .unwrap();
+
+        let narrow = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+        assert_eq!(
+            section(&narrow, "ACTIONABLE"),
+            "\
+=== ACTIONABLE ===
+# 1 - trip
+### before the trip
+- [ ] pack
+### during the trip
+- [ ] drive",
+            "{narrow}"
+        );
+        assert_eq!(
+            section(&narrow, "BLOCKED"),
+            "\
+=== BLOCKED ===
+# 1 - trip
+### during the trip
+- [?] wait",
+            "{narrow}"
+        );
+        assert!(!narrow.contains("## Pending"), "{narrow}");
+        assert!(!narrow.contains("## Completed"), "{narrow}");
+
+        let wide = run_in(scratch.path(), &args(true), Palette::OFF, no_picker).unwrap();
+        assert_eq!(
+            section(&wide, "FINISHED"),
+            "\
+=== FINISHED ===
+# 1 - trip
+### before the trip
+- [x] book",
+            "{wide}"
+        );
+        assert!(!wide.contains("## Completed"), "{wide}");
+    }
+
+    #[test]
+    fn a_dossier_keeps_its_notes_heading() {
+        let scratch = Scratch::new("tasks-dossier-notes").unwrap();
+        scratch
+            .write("dossiers/1 - notes.md", "## Notes\n- [ ] buy shampoo\n")
+            .unwrap();
+
+        let out = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+
+        assert!(out.contains("## Notes\n- [ ] buy shampoo"), "{out}");
+    }
+
+    #[test]
+    fn an_entry_hides_notes_only_while_it_is_the_only_section() {
+        let scratch = Scratch::new("tasks-entry-headings").unwrap();
+        scratch
+            .write("entries/2026-09-20.md", "## Notes\n- [ ] buy shampoo\n")
+            .unwrap();
+
+        let alone = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+        assert!(!alone.contains("## Notes"), "{alone}");
+        assert!(alone.contains("- [ ] buy shampoo"), "{alone}");
+
+        scratch
+            .write(
+                "entries/2026-09-20.md",
+                "\
+## Notes
+- [ ] buy shampoo
+## Meeting
+- [ ] prep slides
+",
+            )
+            .unwrap();
+
+        let together = run_in(scratch.path(), &args(false), Palette::OFF, no_picker).unwrap();
+        assert!(
+            together.contains("## Notes\n- [ ] buy shampoo\n## Meeting\n- [ ] prep slides"),
+            "{together}"
         );
     }
 
