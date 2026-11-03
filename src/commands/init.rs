@@ -24,6 +24,7 @@ const TUTORIAL_NAME: &str = "0000 - welcome to bureau";
 /// What the tutorial and editor prompts say.
 const TUTORIAL_HINT: &str = "(a dossier you can work through)";
 const EDITOR_HINT: &str = "(None is fine for VS Code, Obsidian, etc.)";
+const EDITOR_CONTEXT: &str = "Bureau can add an optional, repository-local .nvim.lua with automatic folds for Markdown notes. Choose None if you use another editor, or if you prefer to configure Neovim yourself.";
 const RECOMMENDED_HINT: &str = "(Git attributes, ignores, EditorConfig and local Git settings)";
 const IDENTITY_HINT: &str = "(used as the Git author)";
 const APPLY_HINT: &str = "(you can edit every generated file afterwards)";
@@ -42,8 +43,8 @@ impl Editor {
     /// The name the picker shows.
     const fn label(self) -> &'static str {
         match self {
-            Self::None => "None",
-            Self::Neovim => "Neovim",
+            Self::None => "None (no editor specific config)",
+            Self::Neovim => "Neovim (.nvim.lua with automatic folds)",
         }
     }
 
@@ -150,6 +151,9 @@ impl Answers for InteractiveAnswers {
     }
 
     fn editor(&mut self, default: Editor) -> Result<Editor> {
+        eprintln!("{}", self.palette.context().paint(EDITOR_CONTEXT));
+        eprintln!();
+
         let items: Vec<&str> = Editor::ALL.iter().map(|editor| editor.label()).collect();
         let index =
             self.ask_select("Editor configuration", EDITOR_HINT, &items, default.index())?;
@@ -736,6 +740,14 @@ mod tests {
             editor_for(Some("\"C:/Program Files/Neovim/bin/nvim.exe\"")),
             Editor::Neovim
         );
+    }
+
+    #[test]
+    fn the_editor_choices_say_what_they_write() {
+        assert!(Editor::None.label().contains("no editor config"));
+        assert!(Editor::Neovim.label().contains(".nvim.lua"));
+        assert!(EDITOR_CONTEXT.contains("None"));
+        assert!(EDITOR_CONTEXT.contains(".nvim.lua"));
     }
 
     #[test]

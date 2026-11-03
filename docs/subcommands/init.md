@@ -29,9 +29,11 @@ run fails with a clear message instead of choosing defaults.
    --local`) unless the effective value is already the same. They are what
    makes the first commit possible.
 3. **Editor configuration.** `None` is the default unless `$EDITOR` names
-   `nvim` or `neovim`. Neovim is the only editor config supported in this
-   version; VS Code and Obsidian users can leave it as `None` and still get
-   `.editorconfig`.
+   `nvim` or `neovim`. Before the picker, the command explains that Neovim
+   adds a repository-local `.nvim.lua` with automatic folds, and that `None`
+   leaves the editor setup untouched. Neovim is the only editor config
+   supported in this version; VS Code and Obsidian users can leave it as
+   `None` and still get `.editorconfig`.
 4. **Welcome dossier.** Defaults to yes when the repository has no dossiers,
    and no when it already has notes.
 5. **Recommended setup.** `.gitattributes`, `.gitignore`, `.editorconfig` and
