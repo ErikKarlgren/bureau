@@ -1,5 +1,6 @@
 //! Subcommand implementations.
 
+mod commit;
 mod doctor;
 mod files;
 mod new;
@@ -51,5 +52,9 @@ pub fn run(command: Command) -> Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Doctor => doctor::run(),
+        Command::Commit(args) | Command::Sync(args) => {
+            commit::run(&args)?;
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }

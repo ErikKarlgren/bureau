@@ -29,6 +29,10 @@ pub enum Command {
     Report(ReportArgs),
     /// Check the notes for formatting problems.
     Doctor,
+    /// Commit uncommitted entries and dossiers.
+    Commit(CommitArgs),
+    /// Commit uncommitted entries and dossiers (alias for commit).
+    Sync(CommitArgs),
 }
 
 /// What `bureau new` can create.
@@ -46,6 +50,18 @@ pub struct DossierArgs {
     /// Dossier name (no need to quote if it has spaces)
     #[arg(required = true, num_args = 1..)]
     pub name: Vec<String>,
+}
+
+/// Arguments for `bureau commit` and `bureau sync`.
+#[derive(Debug, Args, Default)]
+pub struct CommitArgs {
+    /// Commit only daily entries
+    #[arg(long, conflicts_with = "dossiers")]
+    pub entries: bool,
+
+    /// Commit only dossiers
+    #[arg(long, conflicts_with = "entries")]
+    pub dossiers: bool,
 }
 
 /// Arguments for `bureau worklog`.

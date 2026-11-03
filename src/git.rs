@@ -198,6 +198,22 @@ pub fn is_dirty(root: &Path, path: &Path) -> Result<bool> {
     Ok(!output.stdout.is_empty())
 }
 
+/// Whether `path` is tracked by git.
+///
+/// # Errors
+///
+/// Fails when git cannot be executed.
+pub fn is_tracked(root: &Path, path: &Path) -> Result<bool> {
+    let output = Command::new("git")
+        .args(["ls-files", "--error-unmatch", "--"])
+        .arg(path)
+        .current_dir(root)
+        .output()
+        .context("could not run git")?;
+
+    Ok(output.status.success())
+}
+
 /// The newest commit touching each path strictly before `date`.
 ///
 /// One history walk answers this for every path at once, which is the whole

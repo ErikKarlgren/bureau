@@ -130,5 +130,9 @@ It is read-only, prints one `path:line: Severity: message` finding per line on
 stdout, and exits 1 only when it finds an error. Warnings do not fail the run.
 The exact rules live in [`docs/subcommands/doctor.md`](docs/subcommands/doctor.md).
 
+`bureau commit` (alias `bureau sync`) commits any uncommitted daily entries and dossiers
+with their standard commit titles (`update entry: <date>`, `new entry: <date>`, `update dossier: <stem>`,
+`new dossier: <stem>`). Use `--entries` or `--dossiers` to restrict committing to one type.
+
 ## License
 MIT. See [LICENSE](LICENSE).
