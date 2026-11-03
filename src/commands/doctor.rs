@@ -35,7 +35,7 @@ pub fn run() -> Result<ExitCode> {
 
 /// The rest of `run`, with the root and the colours handed in, so a test can
 /// drive it without a git checkout or a terminal.
-fn run_in(root: &Path, palette: Palette) -> Result<(String, bool)> {
+pub fn run_in(root: &Path, palette: Palette) -> Result<(String, bool)> {
     let mut files = Files::new();
     let mut findings = Vec::new();
     let input = read_input(root, &mut files, &mut findings)?;

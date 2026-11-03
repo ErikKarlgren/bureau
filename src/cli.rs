@@ -27,6 +27,8 @@ pub enum Command {
     Tasks(TasksArgs),
     /// Print a report of the work in a period.
     Report(ReportArgs),
+    /// Set up a repository for bureau.
+    Init,
     /// Check the notes for formatting problems.
     Doctor,
 }
@@ -184,6 +186,12 @@ mod tests {
     fn doctor_takes_no_arguments() {
         assert!(parse(&["doctor"]).is_ok());
         assert!(parse(&["doctor", "extra"]).is_err());
+    }
+
+    #[test]
+    fn init_takes_no_arguments() {
+        assert!(parse(&["init"]).is_ok());
+        assert!(parse(&["init", "extra"]).is_err());
     }
 
     #[test]

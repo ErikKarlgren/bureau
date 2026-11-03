@@ -8,6 +8,21 @@ pub const DOSSIER: &str = include_str!("../templates/dossier.md");
 /// The skeleton of a new daily entry.
 pub const DAILY_ENTRY: &str = include_str!("../templates/daily-entry.md");
 
+/// The welcome dossier `bureau init` can create.
+pub const TUTORIAL: &str = include_str!("../templates/tutorial.md");
+
+/// The project-local Neovim configuration `bureau init` can create.
+pub const NVIM_CONFIG: &str = include_str!("../templates/nvim.lua");
+
+/// The tracked Git attributes `bureau init` creates.
+pub const GITATTRIBUTES: &str = include_str!("../templates/gitattributes");
+
+/// The tracked Git ignores `bureau init` creates.
+pub const GITIGNORE: &str = include_str!("../templates/gitignore");
+
+/// The tracked `EditorConfig` file `bureau init` creates.
+pub const EDITORCONFIG: &str = include_str!("../templates/editorconfig");
+
 /// Fill in a template's `$NAME` placeholders.
 ///
 /// Substitution is a single pass, so a value that itself looks like a
@@ -95,6 +110,12 @@ mod tests {
     #[test]
     fn daily_entry_template_only_uses_known_placeholders() {
         let rendered = render(DAILY_ENTRY, &[("DATE", "2026-03-23")]);
+        assert!(!rendered.contains('$'), "left a placeholder in: {rendered}");
+    }
+
+    #[test]
+    fn tutorial_template_only_uses_known_placeholders() {
+        let rendered = render(TUTORIAL, &[("CREATION_DATE", "2026-03-23 10:00:00")]);
         assert!(!rendered.contains('$'), "left a placeholder in: {rendered}");
     }
 }
