@@ -8,10 +8,24 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
+use clap::ValueEnum;
 
 use crate::style::Palette;
 use crate::tasks::Tree;
 use crate::worklog;
+
+/// What format the report prints in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum ReportType {
+    /// Minimal report: lists only dossiers worked on each day without notes, tasks or diff
+    Minimal,
+    /// Worklog report: entry notes and dossier worklogs without git diff
+    Worklog,
+    /// Full report: entry notes, dossier worklogs, and git diff (default)
+    #[default]
+    Full,
+}
 
 /// One dossier's worklog, as read from its file.
 #[derive(Debug)]
@@ -186,6 +200,7 @@ pub fn render(
     diffs: &[(String, Changes)],
     scope: Option<&str>,
     palette: Palette,
+    report_type: ReportType,
 ) -> String {
     let mut lines = vec![palette.title().paint(&title(from, to))];
 
@@ -203,20 +218,33 @@ pub fn render(
             day.date.format("%A")
         )));
 
-        if !day.entry.is_empty() {
-            lines.extend(day.entry.iter().cloned());
-        } else if day.has_entry && day.dossiers.is_empty() {
-            lines.push(String::from("(No work found)"));
-        }
+        match report_type {
+            ReportType::Minimal => {
+                if day.dossiers.is_empty() {
+                    lines.push(String::from("(No work found)"));
+                } else {
+                    for (name, _) in &day.dossiers {
+                        lines.push(format!("- {name}"));
+                    }
+                }
+            }
+            ReportType::Worklog | ReportType::Full => {
+                if !day.entry.is_empty() {
+                    lines.extend(day.entry.iter().cloned());
+                } else if day.has_entry && day.dossiers.is_empty() {
+                    lines.push(String::from("(No work found)"));
+                }
 
-        for (name, body) in &day.dossiers {
-            lines.push(String::new());
-            lines.push(palette.dossier().paint(&format!("### {name}")));
-            lines.extend(body.iter().cloned());
+                for (name, body) in &day.dossiers {
+                    lines.push(String::new());
+                    lines.push(palette.dossier().paint(&format!("### {name}")));
+                    lines.extend(body.iter().cloned());
+                }
+            }
         }
     }
 
-    if !diffs.is_empty() {
+    if report_type == ReportType::Full && !diffs.is_empty() {
         lines.push(String::new());
         lines.push(String::new());
         lines.push(palette.subheading().paint("## Git diff"));
@@ -400,6 +428,15 @@ fn fence_width(body: &str) -> usize {
 pub fn has_work(days: &[Day]) -> bool {
     days.iter()
         .any(|day| !day.entry.is_empty() || !day.dossiers.is_empty())
+}
+
+/// Whether any day has anything to print for the specified report type.
+#[must_use]
+pub fn has_work_for_type(days: &[Day], report_type: ReportType) -> bool {
+    match report_type {
+        ReportType::Minimal => days.iter().any(|day| !day.dossiers.is_empty()),
+        ReportType::Worklog | ReportType::Full => has_work(days),
+    }
 }
 
 /// Why a report with no work at all is an error, worded for how it was asked.
@@ -680,7 +717,15 @@ mod tests {
         let first = date(2026, 9, 20);
         let built = input(vec![dossier("A", &[(first, "- did A\n")])], &[]);
 
-        let output = render(built.from, built.to, &days(&built), &[], None, Palette::OFF);
+        let output = render(
+            built.from,
+            built.to,
+            &days(&built),
+            &[],
+            None,
+            Palette::OFF,
+            ReportType::Full,
+        );
 
         assert!(
             output.starts_with(
@@ -702,6 +747,7 @@ mod tests {
             &[],
             Some("a::b"),
             Palette::OFF,
+            ReportType::Full,
         );
 
         assert!(
@@ -748,7 +794,15 @@ mod tests {
         );
         let days = days(&built);
 
-        let output = render(built.from, built.to, &days, &[], None, Palette::OFF);
+        let output = render(
+            built.from,
+            built.to,
+            &days,
+            &[],
+            None,
+            Palette::OFF,
+            ReportType::Full,
+        );
 
         assert!(
             output.contains("## 2026-09-20 (Sunday)\n(No work found)\n"),
@@ -763,7 +817,15 @@ mod tests {
         let days = days(&built);
 
         assert!(has_work(&days));
-        let output = render(built.from, built.to, &days, &[], None, Palette::OFF);
+        let output = render(
+            built.from,
+            built.to,
+            &days,
+            &[],
+            None,
+            Palette::OFF,
+            ReportType::Full,
+        );
         assert!(!output.contains("No work found"), "{output}");
     }
 
@@ -860,7 +922,15 @@ mod tests {
         )];
 
         assert_eq!(
-            render(built.from, built.to, &days, &diffs, None, Palette::OFF),
+            render(
+                built.from,
+                built.to,
+                &days,
+                &diffs,
+                None,
+                Palette::OFF,
+                ReportType::Full
+            ),
             "\
 # Report from 2026-09-01 to 2026-09-30
 
@@ -901,7 +971,15 @@ diff --git a/dossiers/A.md b/dossiers/A.md
         let body = String::from("diff --git a/A.md b/A.md\n@@ -1,3 +1,3 @@\n ```\n-old\n+new\n");
         let diffs = vec![("A".to_owned(), Changes::Diff(body))];
 
-        let output = render(built.from, built.to, &days, &diffs, None, Palette::OFF);
+        let output = render(
+            built.from,
+            built.to,
+            &days,
+            &diffs,
+            None,
+            Palette::OFF,
+            ReportType::Full,
+        );
 
         assert!(output.contains("````diff\n"), "{output}");
         assert!(output.contains("\n````\n}}}\n"), "{output}");
@@ -913,7 +991,15 @@ diff --git a/dossiers/A.md b/dossiers/A.md
         let days = days(&built);
         let diffs = vec![("A".to_owned(), Changes::None)];
 
-        let output = render(built.from, built.to, &days, &diffs, None, Palette::OFF);
+        let output = render(
+            built.from,
+            built.to,
+            &days,
+            &diffs,
+            None,
+            Palette::OFF,
+            ReportType::Full,
+        );
 
         assert!(
             output.contains("## Git diff\n\n### A\n(No git changes were found)\n"),
@@ -928,7 +1014,15 @@ diff --git a/dossiers/A.md b/dossiers/A.md
         let days = days(&built);
         let diffs = vec![("A".to_owned(), Changes::Unavailable)];
 
-        let output = render(built.from, built.to, &days, &diffs, None, Palette::OFF);
+        let output = render(
+            built.from,
+            built.to,
+            &days,
+            &diffs,
+            None,
+            Palette::OFF,
+            ReportType::Full,
+        );
 
         assert!(
             output.contains("## Git diff\n\n### A\n(Git changes could not be read)\n"),
@@ -943,7 +1037,15 @@ diff --git a/dossiers/A.md b/dossiers/A.md
         let built = input(vec![dossier("A", &[(date(2026, 9, 20), "- did A\n")])], &[]);
         let days = days(&built);
 
-        let output = render(built.from, built.to, &days, &[], None, Palette::OFF);
+        let output = render(
+            built.from,
+            built.to,
+            &days,
+            &[],
+            None,
+            Palette::OFF,
+            ReportType::Full,
+        );
 
         assert!(!output.contains("## Git diff"), "{output}");
     }
@@ -957,7 +1059,15 @@ diff --git a/dossiers/A.md b/dossiers/A.md
             &[(first, entry)],
         );
 
-        let output = render(built.from, built.to, &days(&built), &[], None, Palette::OFF);
+        let output = render(
+            built.from,
+            built.to,
+            &days(&built),
+            &[],
+            None,
+            Palette::OFF,
+            ReportType::Full,
+        );
 
         assert!(!output.contains('\r'), "{output:?}");
     }
@@ -975,7 +1085,15 @@ diff --git a/dossiers/A.md b/dossiers/A.md
             Changes::Diff("diff --git a/A.md b/A.md\n@@ -1 +1 @@\n".to_owned()),
         )];
 
-        let output = render(built.from, built.to, &days, &diffs, None, Palette::ON);
+        let output = render(
+            built.from,
+            built.to,
+            &days,
+            &diffs,
+            None,
+            Palette::ON,
+            ReportType::Full,
+        );
 
         assert!(
             output.contains("\x1b[1;35m# Report from 2026-09-01 to 2026-09-30\x1b[0m"),
@@ -1009,8 +1127,120 @@ diff --git a/dossiers/A.md b/dossiers/A.md
         let days = days(&built);
         let diffs = vec![("A".to_owned(), Changes::None)];
 
-        let output = render(built.from, built.to, &days, &diffs, None, Palette::OFF);
+        let output = render(
+            built.from,
+            built.to,
+            &days,
+            &diffs,
+            None,
+            Palette::OFF,
+            ReportType::Full,
+        );
 
         assert!(!output.contains('\x1b'), "{output:?}");
+    }
+
+    #[test]
+    fn minimal_report_lists_only_dossier_names_per_day_without_notes_tasks_or_diff() {
+        let first = date(2026, 9, 20);
+        let entry = "# 2026-09-20\n\n## Notes\n- some entry note\n";
+        let built = input(
+            vec![
+                dossier("alpha", &[(first, "- [ ] task in alpha\n")]),
+                dossier("beta", &[(first, "- [x] task in beta\n")]),
+            ],
+            &[(first, entry)],
+        );
+        let days = days(&built);
+        let diffs = vec![(
+            "alpha".to_owned(),
+            Changes::Diff("diff --git a/alpha.md b/alpha.md\n".to_owned()),
+        )];
+
+        let output = render(
+            built.from,
+            built.to,
+            &days,
+            &diffs,
+            None,
+            Palette::OFF,
+            ReportType::Minimal,
+        );
+
+        let expected = "\
+# Report from 2026-09-01 to 2026-09-30
+
+
+## 2026-09-20 (Sunday)
+- alpha
+- beta
+";
+        assert_eq!(output, expected);
+        assert!(!output.contains("some entry note"));
+        assert!(!output.contains("task in alpha"));
+        assert!(!output.contains("## Git diff"));
+    }
+
+    #[test]
+    fn worklog_report_includes_notes_and_tasks_but_omits_git_diff() {
+        let first = date(2026, 9, 20);
+        let entry = "# 2026-09-20\n\n## Notes\n- some entry note\n";
+        let built = input(
+            vec![dossier("alpha", &[(first, "- [ ] task in alpha\n")])],
+            &[(first, entry)],
+        );
+        let days = days(&built);
+        let diffs = vec![(
+            "alpha".to_owned(),
+            Changes::Diff("diff --git a/alpha.md b/alpha.md\n".to_owned()),
+        )];
+
+        let output = render(
+            built.from,
+            built.to,
+            &days,
+            &diffs,
+            None,
+            Palette::OFF,
+            ReportType::Worklog,
+        );
+
+        let expected = "\
+# Report from 2026-09-01 to 2026-09-30
+
+
+## 2026-09-20 (Sunday)
+### Notes
+- some entry note
+
+### alpha
+- [ ] task in alpha
+";
+        assert_eq!(output, expected);
+        assert!(!output.contains("## Git diff"));
+    }
+
+    #[test]
+    fn has_work_for_type_differentiates_notes_from_dossiers() {
+        let first = date(2026, 9, 20);
+        let entry_only = input(
+            vec![],
+            &[(first, "# 2026-09-20\n\n## Notes\n- only a note\n")],
+        );
+        let days_entry = days(&entry_only);
+
+        assert!(!has_work_for_type(&days_entry, ReportType::Minimal));
+        assert!(has_work_for_type(&days_entry, ReportType::Worklog));
+        assert!(has_work_for_type(&days_entry, ReportType::Full));
+
+        let with_dossier = input(
+            vec![dossier("alpha", &[(first, "- task\n")])],
+            &[(first, "# 2026-09-20\n\n## Notes\n- note\n")],
+        );
+        let days_dossier = days(&with_dossier);
+
+        assert!(has_work_for_type(&days_dossier, ReportType::Minimal));
+        assert!(has_work_for_type(&days_dossier, ReportType::Worklog));
+        assert!(has_work_for_type(&days_dossier, ReportType::Full));
     }
 }

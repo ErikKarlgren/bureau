@@ -84,6 +84,8 @@ pub struct TasksArgs {
     pub all: bool,
 }
 
+pub use crate::report::ReportType;
+
 /// Arguments for `bureau report`.
 #[derive(Debug, Args)]
 pub struct ReportArgs {
@@ -102,6 +104,10 @@ pub struct ReportArgs {
     /// Leave out the git diff section
     #[arg(long)]
     pub no_diff: bool,
+
+    /// Report format: minimal (dossier names only), worklog (notes and worklogs without diff), full (with diff)
+    #[arg(long = "type", value_enum, default_value_t = ReportType::Full)]
+    pub r#type: ReportType,
 
     /// Report one dossier whose name matches PATTERN
     #[arg(long, value_name = "PATTERN")]
@@ -199,5 +205,34 @@ mod tests {
         for &arguments in cases {
             assert!(parse(arguments).is_ok(), "{arguments:?} should be accepted");
         }
+    }
+
+    #[test]
+    fn report_type_parsing() {
+        let cli = parse(&["report"]).unwrap();
+        let Command::Report(args) = cli.command else {
+            panic!("expected report command");
+        };
+        assert_eq!(args.r#type, ReportType::Full);
+
+        let cli = parse(&["report", "--type", "minimal"]).unwrap();
+        let Command::Report(args) = cli.command else {
+            panic!("expected report command");
+        };
+        assert_eq!(args.r#type, ReportType::Minimal);
+
+        let cli = parse(&["report", "--type", "worklog"]).unwrap();
+        let Command::Report(args) = cli.command else {
+            panic!("expected report command");
+        };
+        assert_eq!(args.r#type, ReportType::Worklog);
+
+        let cli = parse(&["report", "--type", "full"]).unwrap();
+        let Command::Report(args) = cli.command else {
+            panic!("expected report command");
+        };
+        assert_eq!(args.r#type, ReportType::Full);
+
+        assert!(parse(&["report", "--type", "invalid"]).is_err());
     }
 }

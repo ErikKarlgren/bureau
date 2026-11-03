@@ -28,7 +28,7 @@ never commits.
 
 ```
 bureau report [<date>] [--from <date>] [--to <date>] [--no-diff]
-              [--filter <pattern>] [--menu]
+              [--filter <pattern>] [--menu] [--type <type>]
 ```
 
 | Argument | Meaning |
@@ -37,6 +37,7 @@ bureau report [<date>] [--from <date>] [--to <date>] [--no-diff]
 | `--from <date>` | First day of the period, **inclusive**. Defaults to today when neither it nor `<date>` is given. |
 | `--to <date>` | Last day of the period, **inclusive**. Defaults to today. |
 | `--no-diff` | Omit the whole `## Git diff` section. |
+| `--type <type>` | Output format: `minimal` (only dossiers worked on per day), `worklog` (entry notes and dossier worklogs without git diff), or `full` (default: notes, worklogs, and git diff). |
 | `--filter <pattern>` | Restrict the report to one dossier. **The pattern is required** (unlike `tasks`), so it can never be mistaken for the `<date>` positional; `--menu` is how the picker is asked for. The matching rule is `bureau worklog`'s. |
 | `--menu` | Open the same picker. |
 

@@ -63,10 +63,11 @@ pub fn run(args: &ReportArgs) -> Result<()> {
 
     // A report with no diff section touches no commit and no tree, so the
     // repository is not read at all: no HEAD check, no empty tree, no walk.
-    let has_head = if args.no_diff {
-        true
-    } else {
+    let needs_diff = args.r#type == crate::report::ReportType::Full && !args.no_diff;
+    let has_head = if needs_diff {
         git::has_head(&root)?
+    } else {
+        true
     };
 
     let differ = |requests: &[DiffRequest]| batch_diffs(&root, requests, has_head);
@@ -165,21 +166,30 @@ fn run_in(
         entries,
     };
     let days = report::days(&input);
-    if !report::has_work(&days) {
+    if !report::has_work_for_type(&days, args.r#type) {
         bail!(
             "{}",
             report::nothing_to_report(from, to, selected.is_some(), !input.entries.is_empty())
         );
     }
 
-    let (diffs, warnings) = if args.no_diff {
-        (Vec::new(), Vec::new())
-    } else {
+    let needs_diff = args.r#type == crate::report::ReportType::Full && !args.no_diff;
+    let (diffs, warnings) = if needs_diff {
         collect_diffs(&days, &chosen, from, to, today, palette, differ)?
+    } else {
+        (Vec::new(), Vec::new())
     };
 
     Ok((
-        report::render(from, to, &days, &diffs, scope.as_deref(), palette),
+        report::render(
+            from,
+            to,
+            &days,
+            &diffs,
+            scope.as_deref(),
+            palette,
+            args.r#type,
+        ),
         warnings,
     ))
 }
@@ -511,6 +521,7 @@ mod tests {
             from: Some("2026-09-01".to_owned()),
             to: Some("2026-09-30".to_owned()),
             no_diff: false,
+            r#type: crate::report::ReportType::Full,
             filter: None,
             menu: false,
         }
@@ -969,5 +980,92 @@ mod tests {
         assert!(output.contains("day note"), "{output}");
         assert!(!output.contains("did A"), "{output}");
         assert!(!output.contains("### A"), "{output}");
+    }
+
+    #[test]
+    fn report_type_worklog_includes_notes_and_tasks_but_no_diff() {
+        let scratch = with_dossier("report-worklog");
+        scratch
+            .write(
+                "entries/2026-09-20.md",
+                "# 2026-09-20\n\n## Notes\n- [ ] entry note\n\n## Worked on Dossiers\n\
+                 - [A](<../dossiers/A.md>)\n",
+            )
+            .unwrap();
+
+        let mut test_args = args();
+        test_args.r#type = crate::report::ReportType::Worklog;
+
+        let (output, warnings) = run_in(
+            scratch.path(),
+            &test_args,
+            Palette::OFF,
+            today(),
+            &named,
+            no_picker,
+        )
+        .unwrap();
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(output.contains("### Notes\n- [ ] entry note"), "{output}");
+        assert!(output.contains("### A\n- did A"), "{output}");
+        assert!(!output.contains("## Git diff"), "{output}");
+    }
+
+    #[test]
+    fn report_type_minimal_includes_only_dossiers_no_notes_tasks_or_diff() {
+        let scratch = with_dossier("report-minimal");
+        scratch
+            .write(
+                "entries/2026-09-20.md",
+                "# 2026-09-20\n\n## Notes\n- [ ] entry note\n\n## Worked on Dossiers\n\
+                 - [A](<../dossiers/A.md>)\n",
+            )
+            .unwrap();
+
+        let mut test_args = args();
+        test_args.r#type = crate::report::ReportType::Minimal;
+
+        let (output, warnings) = run_in(
+            scratch.path(),
+            &test_args,
+            Palette::OFF,
+            today(),
+            &named,
+            no_picker,
+        )
+        .unwrap();
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(output.contains("## 2026-09-20 (Sunday)\n- A\n"), "{output}");
+        assert!(!output.contains("entry note"), "{output}");
+        assert!(!output.contains("did A"), "{output}");
+        assert!(!output.contains("### A"), "{output}");
+        assert!(!output.contains("## Git diff"), "{output}");
+    }
+
+    #[test]
+    fn report_type_minimal_fails_when_period_has_only_notes_and_no_dossiers() {
+        let scratch = Scratch::new("report-minimal-empty").unwrap();
+        scratch
+            .write(
+                "entries/2026-09-20.md",
+                "# 2026-09-20\n\n## Notes\n- [ ] only note\n",
+            )
+            .unwrap();
+
+        let mut test_args = args();
+        test_args.r#type = crate::report::ReportType::Minimal;
+
+        let result = run_in(
+            scratch.path(),
+            &test_args,
+            Palette::OFF,
+            today(),
+            &named,
+            no_picker,
+        );
+
+        assert!(result.is_err());
     }
 }
