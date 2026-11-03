@@ -36,20 +36,28 @@ enum Editor {
 }
 
 impl Editor {
-    /// The choices in the order the picker shows them.
-    const CHOICES: [&str; 2] = ["None", "Neovim"];
+    /// Every editor the picker offers, in the order it shows them.
+    const ALL: [Self; 2] = [Self::None, Self::Neovim];
 
-    /// The index of the choice that is this editor.
-    const fn index(self) -> usize {
+    /// The name the picker shows.
+    const fn label(self) -> &'static str {
         match self {
-            Self::None => 0,
-            Self::Neovim => 1,
+            Self::None => "None",
+            Self::Neovim => "Neovim",
         }
     }
 
+    /// The index of the choice that is this editor.
+    fn index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|editor| *editor == self)
+            .unwrap_or(0)
+    }
+
     /// The editor a picker index names.
-    const fn from_index(index: usize) -> Self {
-        if index == 1 { Self::Neovim } else { Self::None }
+    fn from_index(index: usize) -> Self {
+        Self::ALL.get(index).copied().unwrap_or(Self::None)
     }
 
     /// The file this editor's project-local configuration lives in.
@@ -142,12 +150,9 @@ impl Answers for InteractiveAnswers {
     }
 
     fn editor(&mut self, default: Editor) -> Result<Editor> {
-        let index = self.ask_select(
-            "Editor configuration",
-            EDITOR_HINT,
-            &Editor::CHOICES,
-            default.index(),
-        )?;
+        let items: Vec<&str> = Editor::ALL.iter().map(|editor| editor.label()).collect();
+        let index =
+            self.ask_select("Editor configuration", EDITOR_HINT, &items, default.index())?;
 
         Ok(Editor::from_index(index))
     }
@@ -412,15 +417,25 @@ fn default_editor() -> Editor {
     editor_for(std::env::var("EDITOR").ok().as_deref())
 }
 
+/// The first token of `editor` when it starts with `quote`, without the quotes.
+fn quoted_program(editor: &str, quote: char) -> Option<&str> {
+    let rest = editor.strip_prefix(quote)?;
+    Some(rest.split(quote).next().unwrap_or(rest))
+}
+
 /// The editor an `$EDITOR` value names, if it is one bureau supports.
 fn editor_for(editor: Option<&str>) -> Editor {
     let Some(editor) = editor else {
         return Editor::None;
     };
 
-    let program = editor.split_whitespace().next().unwrap_or_default();
+    let editor = editor.trim();
+    let program = quoted_program(editor, '"')
+        .or_else(|| quoted_program(editor, '\''))
+        .unwrap_or_else(|| editor.split_whitespace().next().unwrap_or_default());
+
     let name = Path::new(program)
-        .file_name()
+        .file_stem()
         .and_then(|name| name.to_str())
         .unwrap_or_default();
 
@@ -717,6 +732,10 @@ mod tests {
         assert_eq!(editor_for(Some("nvim")), Editor::Neovim);
         assert_eq!(editor_for(Some("neovim -u NONE")), Editor::Neovim);
         assert_eq!(editor_for(Some("/usr/bin/nvim")), Editor::Neovim);
+        assert_eq!(
+            editor_for(Some("\"C:/Program Files/Neovim/bin/nvim.exe\"")),
+            Editor::Neovim
+        );
     }
 
     #[test]
@@ -744,19 +763,17 @@ mod tests {
         );
         assert_eq!(
             scratch
-                .git_output(&["config", "--local", "--get", "core.quotepath"])
+                .git_output(&["config", "--get", "core.quotepath"])
                 .trim(),
             "false"
         );
         assert_eq!(
-            scratch
-                .git_output(&["config", "--local", "--get", "user.name"])
-                .trim(),
+            scratch.git_output(&["config", "--get", "user.name"]).trim(),
             "Bureau"
         );
         assert_eq!(
             scratch
-                .git_output(&["config", "--local", "--get", "fetch.writeCommitGraph"])
+                .git_output(&["config", "--get", "fetch.writeCommitGraph"])
                 .trim(),
             "true"
         );
@@ -886,12 +903,11 @@ mod tests {
         let mut answers = TestAnswers::new();
         run(&scratch, &mut answers).unwrap();
 
-        let config = scratch.path().join(".nvim.lua");
         let output = std::process::Command::new("nvim")
             .current_dir(scratch.path())
             .args(["--headless", "-u", "NONE", "-n", "-i", "NONE"])
             .arg("-c")
-            .arg(format!("luafile {}", config.display()))
+            .arg("luafile .nvim.lua")
             .arg("-c")
             .arg("qa!")
             .output();
@@ -908,6 +924,70 @@ mod tests {
         assert!(
             !stderr.contains("E5112"),
             "the generated .nvim.lua has a syntax error: {stderr}"
+        );
+    }
+
+    #[test]
+    fn the_nvim_config_finds_its_root_and_matches_the_rust_fence_rules() {
+        let scratch = Scratch::new("init-nvim-folds").unwrap();
+        let mut answers = TestAnswers::new();
+        run(&scratch, &mut answers).unwrap();
+
+        scratch
+            .write(
+                "note.md",
+                "# Title\n## Before\n~~~text\n```\n# not a heading\n~~~\n## After\nText.\n    ```\n# indented heading\nText.\n",
+            )
+            .unwrap();
+        scratch
+            .write(
+                "check.lua",
+                r#"assert(vim.wo.foldmethod == "expr", "foldmethod=" .. vim.wo.foldmethod)
+assert(vim.wo.foldlevel == 99, "foldlevel=" .. vim.wo.foldlevel)
+local expected = { ">1", ">2", "2", "2", "2", "2", ">2", "2", "3", ">1", "1" }
+for index, value in ipairs(expected) do
+  local got = _G.bureau_notes_fold(index)
+  assert(got == value, "line " .. index .. " expected " .. value .. " got " .. tostring(got))
+end
+vim.cmd("edit .nvim.lua")
+vim.bo.filetype = "lua"
+vim.cmd("doautocmd BufEnter")
+assert(vim.wo.foldmethod ~= "expr", "folds leaked into a non-Markdown buffer")
+vim.api.nvim_out_write("ok\n")
+"#,
+            )
+            .unwrap();
+
+        let output = std::process::Command::new("nvim")
+            .current_dir(scratch.path())
+            .args(["--headless", "-u", "NONE", "-n", "-i", "NONE", "note.md"])
+            .args([
+                "-c",
+                "luafile .nvim.lua",
+                "-c",
+                "setfiletype markdown",
+                "-c",
+                "doautocmd FileType markdown",
+                "-c",
+                "luafile check.lua",
+                "-c",
+                "qa!",
+            ])
+            .output();
+
+        let Ok(output) = output else {
+            return;
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert!(
+            stdout.contains("ok") || stderr.contains("ok"),
+            "folds check failed: stdout={stdout:?} stderr={stderr:?}"
+        );
+        assert!(
+            !stderr.contains("E5112"),
+            "the generated .nvim.lua failed: {stderr}"
         );
     }
 
