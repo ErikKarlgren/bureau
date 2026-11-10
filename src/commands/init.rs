@@ -793,7 +793,8 @@ fn apply(plan: &Plan, cwd: &Path, palette: Palette, warning_palette: Palette) ->
 
     if plan.editor == Editor::Neovim {
         println!(
-            "To use '.nvim.lua', add `vim.opt.exrc = true` to your Neovim config, then open Neovim here and trust the file."
+            "{} To use '.nvim.lua', add `vim.opt.exrc = true` to your Neovim config, then open Neovim here and trust the file.",
+            palette.heading().paint("Neovim setup:")
         );
     }
 
