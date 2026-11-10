@@ -22,7 +22,7 @@ use crate::template;
 const TUTORIAL_NAME: &str = "0000 - welcome to bureau";
 
 /// What the tutorial and editor prompts say.
-const TUTORIAL_HINT: &str = "(a dossier you can work through)";
+const TUTORIAL_HINT: &str = "(a dossier to teach you about bureau)";
 const EDITOR_HINT: &str = "(None is fine for VS Code, Obsidian, etc.)";
 const EDITOR_CONTEXT: &str = "Bureau can add an optional, repository-local .nvim.lua with automatic folds for Markdown notes. Choose None if you use another editor, or if you prefer to configure Neovim yourself.";
 const RECOMMENDED_HINT: &str = "(Git attributes, ignores, EditorConfig and local Git settings)";
@@ -162,7 +162,7 @@ impl Answers for InteractiveAnswers {
     }
 
     fn tutorial(&mut self, default: bool) -> Result<bool> {
-        self.ask_confirm("Welcome dossier", TUTORIAL_HINT, default)
+        self.ask_confirm("Tutorial dossier", TUTORIAL_HINT, default)
     }
 
     fn recommended(&mut self) -> Result<bool> {
