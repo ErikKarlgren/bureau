@@ -127,9 +127,23 @@
 
 ## init
 
-- [ ] `bureau init`: Creates a git repo if it doesn't exist, adds some files
-      with already chosen presets (`.nvim.lua` with pre-configured folds, maybe
-      some git hooks, etc)
+- [x] `bureau init`: creates a Git repository if one is missing, asks for the
+      author identity, writes `.gitattributes`, `.gitignore`, `.editorconfig`
+      and an optional Neovim `.nvim.lua`, creates an optional welcome dossier,
+      and applies the recommended local Git settings.
+- [ ] VHS demo: add a checked-in `docs/demo.tape` and a way to regenerate the
+      GIF, probably in a later branch once the build pipeline is settled. Use
+      `bat` rather than `cat` if it makes the tutorial easier to read.
+      - For the Neovim part, use a temporary `XDG_CONFIG_HOME/nvim/init.lua`
+        with `vim.opt.exrc = true` and pre-trust `.nvim.lua`, so the trust
+        prompt does not make the recording differ between runs.
+- [ ] When the VHS/build pipeline exists, run `bureau doctor` (or the internal
+      check it calls) against the generated welcome dossier and fail the job
+      if that dossier reports any finding at all.
+- [ ] README: add a section showing Neovim's automatic folds with a GIF, next
+      to the general tutorial recording.
+- [ ] Consider git hooks later; they are deliberately out of scope for the
+      first `bureau init`.
 
 ## Miscellaneous
 

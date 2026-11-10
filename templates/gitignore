@@ -1,0 +1,12 @@
+# Editor swap and backup files.
+*.swp
+*.swo
+*.un~
+*~
+
+# OS metadata.
+.DS_Store
+Thumbs.db
+
+# Obsidian's per-window state. The rest of .obsidian/ can stay tracked.
+**/.obsidian/workspace*

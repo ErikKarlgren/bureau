@@ -2,6 +2,7 @@
 
 mod doctor;
 mod files;
+mod init;
 mod new;
 mod paths;
 mod report;
@@ -48,6 +49,10 @@ pub fn run(command: Command) -> Result<ExitCode> {
         }
         Command::Report(args) => {
             report::run(&args)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Init => {
+            init::run()?;
             Ok(ExitCode::SUCCESS)
         }
         Command::Doctor => doctor::run(),

@@ -7,13 +7,14 @@ Git-based Work Dossiers for Legacy Systems
 
 ## Installation
 ```bash
-cargo install --path .
+cargo install --frozen --path .
 ```
 
 ## Usage
 Run it from inside the git repository where you keep your notes:
 
 ```bash
+bureau init
 bureau new dossier Some dossier name
 bureau new entry
 bureau worklog refactor
@@ -23,6 +24,18 @@ bureau report
 bureau report --from "a week ago"
 bureau doctor
 ```
+
+`bureau init` sets up a repository in the current directory, or uses the
+repository already there. It checks the author name and email, asking only
+when they are missing, offers a Neovim `.nvim.lua` with automatic folds when
+one is not already present, optionally creates
+`dossiers/0000 - welcome to bureau.md` as a tutorial, and writes
+`.gitattributes`, `.gitignore` and `.editorconfig`. It applies a few
+repository-local Git settings with `git config --local` (not a root
+`.gitconfig`, which Git would ignore) and commits only the files it created.
+Re-running it is safe: existing files are left alone, and it only prompts for
+pieces that are still missing. The exact rules live in
+[`docs/subcommands/init.md`](docs/subcommands/init.md).
 
 Dossiers are written to `dossiers/<name>.md` and daily entries to
 `entries/<YYYY-MM-DD>.md`, both at the root of that repository, and both are

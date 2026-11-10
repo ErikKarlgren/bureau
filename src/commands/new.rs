@@ -320,7 +320,7 @@ fn creating_dossier(name: &str, palette: Palette) -> String {
 /// absolute, it falls back to the path itself, which is at least true. A name
 /// is never invented: `../notes/a.md` for a file that is not there would be
 /// worse than a long one that is right.
-fn shown_from(path: &Path, base: Option<&Path>) -> String {
+pub fn shown_from(path: &Path, base: Option<&Path>) -> String {
     relative_to(path, base).unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 

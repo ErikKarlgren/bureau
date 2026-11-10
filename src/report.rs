@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 
+use crate::fence::Fence;
 use crate::heading;
 use crate::style::Palette;
 use crate::tasks::Tree;
@@ -359,10 +360,9 @@ fn demote(line: &str) -> String {
 fn fence_width(body: &str) -> usize {
     let longest = body
         .lines()
-        .filter_map(|line| {
-            let content = line.trim_start_matches(' ');
-            let indent = line.len().saturating_sub(content.len());
-            (indent <= 3).then(|| content.chars().take_while(|letter| *letter == '`').count())
+        .filter_map(|line| match Fence::run(line) {
+            Some(('`', length)) => Some(length),
+            _ => None,
         })
         .max()
         .unwrap_or(0);

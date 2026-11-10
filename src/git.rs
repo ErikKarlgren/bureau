@@ -29,6 +29,179 @@ pub fn toplevel() -> Result<PathBuf> {
     Ok(PathBuf::from(path.trim_end()))
 }
 
+/// The root of the repository containing `start`, or `None` when there is no
+/// repository to find.
+///
+/// This asks git rather than looking for a `.git` directory: a linked worktree
+/// and a submodule both use a `.git` *file*, `GIT_DIR` and `GIT_WORK_TREE` can
+/// point elsewhere, and a directory can sit inside an enclosing repository
+/// without holding a `.git` of its own.
+///
+/// # Errors
+///
+/// Fails when `git` cannot be run, when the path is a bare repository or the
+/// `.git` directory itself, or when git finds something it cannot read.
+pub fn discover(start: &Path) -> Result<Option<PathBuf>> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(start)
+        .output()
+        .context("could not run git")?;
+
+    if !output.status.success() {
+        // A plain directory that is not a repository is the normal case. A
+        // `.git` in the ancestry but a failing `rev-parse` is not: git is
+        // refusing to read a repository it can see, and initializing over it
+        // would be worse than stopping.
+        if has_git_directory(start) {
+            bail!(
+                "git could not read the repository here: {}",
+                stderr(&output)
+            );
+        }
+        return Ok(None);
+    }
+
+    if String::from_utf8_lossy(&output.stdout).trim() != "true" {
+        if rev_parse_bool(start, "--is-bare-repository")? {
+            bail!("bureau needs a working tree, not a bare repository");
+        }
+        if rev_parse_bool(start, "--is-inside-git-dir")? {
+            bail!("bureau needs a working tree, not the .git directory");
+        }
+        bail!("bureau needs a working tree");
+    }
+
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(start)
+        .output()
+        .context("could not run git")?;
+
+    if !output.status.success() {
+        bail!("git rev-parse --show-toplevel failed: {}", stderr(&output));
+    }
+
+    let path = String::from_utf8(output.stdout).context("git returned a path that is not UTF-8")?;
+    Ok(Some(PathBuf::from(path.trim_end())))
+}
+
+/// Whether `start` or one of its parents holds a `.git`.
+///
+/// Only used to tell "not a repository" from "a repository git will not read"
+/// when `rev-parse` fails; discovery itself never relies on this.
+fn has_git_directory(start: &Path) -> bool {
+    let start = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
+
+    start
+        .ancestors()
+        .any(|directory| directory.join(".git").exists())
+}
+
+/// One of git's boolean `rev-parse` answers.
+fn rev_parse_bool(start: &Path, flag: &str) -> Result<bool> {
+    let output = Command::new("git")
+        .args(["rev-parse", flag])
+        .current_dir(start)
+        .output()
+        .context("could not run git")?;
+
+    if !output.status.success() {
+        bail!("git rev-parse {flag} failed: {}", stderr(&output));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim() == "true")
+}
+
+/// Create a repository at `root`, if there is not one already.
+///
+/// # Errors
+///
+/// Fails when `git init` cannot be run or exits with an error.
+pub fn init(root: &Path) -> Result<()> {
+    let output = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(root)
+        .output()
+        .context("could not run git")?;
+
+    if !output.status.success() {
+        bail!("git init failed: {}", stderr(&output));
+    }
+
+    Ok(())
+}
+
+/// The effective value of `key`, or `None` when it is not set.
+///
+/// # Errors
+///
+/// Fails when `git` cannot be run or exits with an error other than "not set".
+pub fn config_get(root: &Path, key: &str) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .args(["config", "--get", key])
+        .current_dir(root)
+        .output()
+        .context("could not run git")?;
+
+    match output.status.code() {
+        Some(0) => Ok(Some(
+            String::from_utf8_lossy(&output.stdout)
+                .trim_end()
+                .to_owned(),
+        )),
+        Some(1) => Ok(None),
+        _ => bail!("git config --get {key} failed: {}", stderr(&output)),
+    }
+}
+
+/// Set a repository-local `key` to `value`.
+///
+/// # Errors
+///
+/// Fails when `git` cannot be run or exits with an error.
+pub fn config_set(root: &Path, key: &str, value: &str) -> Result<()> {
+    let output = Command::new("git")
+        .args(["config", "--local", "--replace-all", key, value])
+        .current_dir(root)
+        .output()
+        .context("could not run git")?;
+
+    if !output.status.success() {
+        bail!("git config {key} failed: {}", stderr(&output));
+    }
+
+    Ok(())
+}
+
+/// Git's major and minor version, for the few settings that depend on it.
+///
+/// A version that cannot be read is reported as `(0, 0)`, which selects the
+/// older, safer setting.
+///
+/// # Errors
+///
+/// Fails when `git --version` cannot be run or exits with an error.
+pub fn version(root: &Path) -> Result<(u32, u32)> {
+    let output = Command::new("git")
+        .arg("--version")
+        .current_dir(root)
+        .output()
+        .context("could not run git")?;
+
+    if !output.status.success() {
+        bail!("git --version failed: {}", stderr(&output));
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    let version = text.split_whitespace().nth(2).unwrap_or_default();
+    let mut parts = version.split('.');
+    let major: u32 = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+    let minor: u32 = parts.next().and_then(|part| part.parse().ok()).unwrap_or(0);
+
+    Ok((major, minor))
+}
+
 /// Stage and commit the given files, leaving any other staged changes alone.
 ///
 /// `root` is the repository root the paths belong to; git is run there so an
@@ -39,8 +212,30 @@ pub fn toplevel() -> Result<PathBuf> {
 /// Fails when `git add` or `git commit` exits with an error. The message
 /// carries git's own explanation.
 pub fn commit(root: &Path, paths: &[&Path], message: &str) -> Result<()> {
-    let added = Command::new("git")
-        .arg("add")
+    commit_with(root, paths, message, false)
+}
+
+/// Stage and commit files that the repository's ignore rules would skip.
+///
+/// `bureau init` asks before it creates a file, so a globally ignored
+/// `.nvim.lua` is still something the user asked for. Everything else uses
+/// [`commit`], which leaves ignored paths alone.
+///
+/// # Errors
+///
+/// Fails in the same cases as [`commit`].
+pub fn commit_force(root: &Path, paths: &[&Path], message: &str) -> Result<()> {
+    commit_with(root, paths, message, true)
+}
+
+/// The shared body of [`commit`] and [`commit_force`].
+fn commit_with(root: &Path, paths: &[&Path], message: &str, force: bool) -> Result<()> {
+    let mut add = Command::new("git");
+    add.arg("add");
+    if force {
+        add.arg("-f");
+    }
+    let added = add
         .args(paths)
         .current_dir(root)
         .output()
@@ -82,7 +277,11 @@ fn stderr(output: &Output) -> String {
 }
 
 /// The settings pinned on every `git diff`, so the bytes a report prints do not
-/// depend on a user's or a repository's configuration.
+/// depend on a user's own configuration.
+///
+/// `.gitattributes` is still read: a `diff` driver selected there can change
+/// hunk headers. `bureau init` writes `*.md diff=markdown` for exactly that
+/// reason and says so in the generated file.
 ///
 /// `-c` has to come before the subcommand, and each of these is a setting that
 /// changes the output or runs somebody's tool if it is left alone.
@@ -770,6 +969,84 @@ mod tests {
         git(unborn.path(), &["init", "-q"]);
         assert!(!has_head(unborn.path()).unwrap());
         assert!(head(unborn.path()).unwrap().is_none());
+    }
+
+    #[test]
+    fn discovery_asks_git_about_the_repository() {
+        let empty = Scratch::new("git-discover-empty").unwrap();
+        assert_eq!(discover(empty.path()).unwrap(), None);
+
+        let scratch = repository("git-discover");
+        let root = scratch.path().canonicalize().unwrap();
+        assert_eq!(discover(root.as_path()).unwrap(), Some(root.clone()));
+
+        let subdirectory = root.join("sub");
+        fs::create_dir_all(&subdirectory).unwrap();
+        assert_eq!(
+            discover(subdirectory.as_path()).unwrap(),
+            Some(root.clone())
+        );
+
+        let worktree = root.join("linked");
+        git(
+            root.as_path(),
+            &["worktree", "add", "-q", "linked", "-b", "linked-branch"],
+        );
+        assert_eq!(
+            discover(worktree.as_path()).unwrap(),
+            Some(worktree.canonicalize().unwrap())
+        );
+
+        let dot_git = root.join(".git");
+        assert!(discover(dot_git.as_path()).is_err());
+
+        let bare = Scratch::new("git-discover-bare").unwrap();
+        bare.git(&["init", "--bare", "-q"]);
+        assert!(discover(bare.path()).is_err());
+    }
+
+    #[test]
+    fn local_config_is_read_and_written() {
+        let scratch = Scratch::new("git-config").unwrap();
+        scratch.init_git();
+
+        assert_eq!(
+            config_get(scratch.path(), "user.name").unwrap().as_deref(),
+            Some("bureau")
+        );
+        assert_eq!(config_get(scratch.path(), "bureau.not-set").unwrap(), None);
+
+        config_set(scratch.path(), "core.quotepath", "false").unwrap();
+        assert_eq!(
+            config_get(scratch.path(), "core.quotepath")
+                .unwrap()
+                .as_deref(),
+            Some("false")
+        );
+    }
+
+    #[test]
+    fn a_forced_commit_stages_an_ignored_file() {
+        let scratch = Scratch::new("git-commit-force").unwrap();
+        scratch.init_git();
+        scratch.write(".gitignore", ".nvim.lua\n").unwrap();
+        scratch.write(".nvim.lua", "-- local\n").unwrap();
+
+        commit_force(
+            scratch.path(),
+            &[Path::new(".nvim.lua")],
+            "init: set up bureau",
+        )
+        .unwrap();
+
+        assert!(scratch.git_output(&["ls-files"]).contains(".nvim.lua"));
+    }
+
+    #[test]
+    fn the_version_is_read_from_git() {
+        let scratch = Scratch::new("git-version").unwrap();
+        let (major, _minor) = version(scratch.path()).unwrap();
+        assert!(major >= 2, "unexpected git major version: {major}");
     }
 
     #[test]

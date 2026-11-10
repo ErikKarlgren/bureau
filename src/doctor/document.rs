@@ -1,3 +1,5 @@
+use crate::fence::Fence;
+
 /// The parts of one file the checks need.
 #[derive(Debug, Default)]
 pub(super) struct Document {
@@ -15,20 +17,20 @@ impl Document {
             line_count: lines.len(),
             ..Self::default()
         };
-        let mut fence: Option<(char, usize, usize)> = None;
+        let mut fence: Option<(Fence, usize)> = None;
 
         for (index, line) in lines.iter().enumerate() {
             let number = index.saturating_add(1);
 
-            if let Some((character, length, _)) = fence {
-                if is_closing_fence(line, character, length) {
+            if let Some((open, _)) = fence {
+                if open.closes(line) {
                     fence = None;
                 }
                 continue;
             }
 
-            if let Some((character, length)) = opening_fence(line) {
-                fence = Some((character, length, number));
+            if let Some(open) = Fence::opening(line) {
+                fence = Some((open, number));
                 continue;
             }
 
@@ -44,7 +46,7 @@ impl Document {
             }
         }
 
-        document.unclosed_fence = fence.map(|(_, _, line)| line);
+        document.unclosed_fence = fence.map(|(_, line)| line);
         document
     }
 
@@ -316,44 +318,4 @@ fn parse_heading(line: &str, number: usize) -> Option<Heading> {
         text: after.trim().to_owned(),
         raw: line.to_owned(),
     })
-}
-
-/// The opening fence a line starts, and its character and length.
-fn opening_fence(line: &str) -> Option<(char, usize)> {
-    let indent = line
-        .len()
-        .saturating_sub(line.trim_start_matches(' ').len());
-    if indent > 3 {
-        return None;
-    }
-
-    let rest = line.get(indent..)?;
-    let character = rest.chars().next()?;
-    if character != '`' && character != '~' {
-        return None;
-    }
-
-    let length = rest.chars().take_while(|found| *found == character).count();
-    (length >= 3).then_some((character, length))
-}
-
-/// Whether a line closes the fence opened by `character`/`length`.
-fn is_closing_fence(line: &str, character: char, length: usize) -> bool {
-    let indent = line
-        .len()
-        .saturating_sub(line.trim_start_matches(' ').len());
-    if indent > 3 {
-        return false;
-    }
-
-    let Some(rest) = line.get(indent..) else {
-        return false;
-    };
-    let count = rest.chars().take_while(|found| *found == character).count();
-    if count < length {
-        return false;
-    }
-
-    rest.get(count..)
-        .is_some_and(|after| after.trim().is_empty())
 }
