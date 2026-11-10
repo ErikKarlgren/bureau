@@ -1,0 +1,8 @@
+# Keep text files LF in the repository and in every checkout, exactly as
+# `templates/gitattributes` tells the repositories bureau creates to.
+* text=auto eol=lf
+
+# Use Git's built-in Markdown diff driver: hunk headers name the nearest
+# heading, matching `templates/gitattributes` and the diffs `bureau report`
+# prints.
+*.md text diff=markdown
