@@ -5,6 +5,19 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// An absolute path for a test, written the way the host platform writes one.
+///
+/// `/home/user/notes` is absolute on Unix but relative on Windows, where
+/// `Path::is_absolute` needs a drive prefix. A test that fakes a working
+/// directory uses this, so the same assertion holds on both platforms.
+pub fn absolute(path: &str) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(format!("C:/{path}"))
+    } else {
+        PathBuf::from(format!("/{path}"))
+    }
+}
+
 /// A scratch repository root that deletes itself afterwards.
 pub struct Scratch(PathBuf);
 
