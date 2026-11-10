@@ -16,10 +16,11 @@ concurrency:
 env:
   STYLUA_VERSION: "2.6.0"
   ACTIONLINT_VERSION: "1.7.12"
+  NVIM_VERSION: "0.12.6"
 
 jobs:
-  linux:
-    name: Linux
+  ubuntu:
+    name: Ubuntu
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -47,12 +48,21 @@ jobs:
           echo "$bin" >> "$GITHUB_PATH"
 
       # The two Neovim tests return early when `nvim` is missing, so they only
-      # verify the embedded `.nvim.lua` template when it is installed.
+      # verify the embedded `.nvim.lua` template when it is installed. Both
+      # jobs install the same pinned release, so the template is checked
+      # against one version and its Windows branch is exercised too.
       - name: Install Neovim
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends neovim
+          curl -fsSLo "$RUNNER_TEMP/nvim.tar.gz" \
+            "https://github.com/neovim/neovim/releases/download/v${NVIM_VERSION}/nvim-linux-x86_64.tar.gz"
+          tar -xzf "$RUNNER_TEMP/nvim.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      # A silent skip is the failure mode to guard against: if this step cannot
+      # see `nvim`, the two Neovim tests would pass without ever running it.
+      - name: Verify Neovim
+        run: nvim --version
 
       - name: Check
         run: just ci-full
@@ -70,7 +80,21 @@ jobs:
         with:
           tool: just
 
-      # `just ci` is the portable subset: the Lua, spelling and workflow
-      # checks need tools that are only installed on the Linux job.
+      - name: Install Neovim
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $zip = Join-Path $env:RUNNER_TEMP "nvim.zip"
+          Invoke-WebRequest -Uri "https://github.com/neovim/neovim/releases/download/v$env:NVIM_VERSION/nvim-win64.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP -Force
+          (Join-Path $env:RUNNER_TEMP "nvim-win64\bin") | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Verify Neovim
+        run: nvim --version
+
+      # `just ci` is the portable subset: the stylua, spelling and workflow
+      # checks need tools that are only installed on the Ubuntu job. The Neovim
+      # template tests do run here, since Neovim is installed above.
       - name: Check
         run: just ci

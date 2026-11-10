@@ -1,6 +1,6 @@
 # `just ci` is the portable gate: what the Windows CI job runs, and what
 # anyone without the extra linters installed can run. `just ci-full` adds the
-# Lua, spell and workflow checks the Linux CI job runs.
+# Lua, spell and workflow checks the Ubuntu CI job runs.
 #
 # The tool versions are pinned by `rust-toolchain.toml` (Rust), and by the
 # install lines in `.github/workflows/ci.yml` and the container/devshell, if
