@@ -43,7 +43,7 @@ impl Editor {
     /// The name the picker shows.
     const fn label(self) -> &'static str {
         match self {
-            Self::None => "None (no editor specific config)",
+            Self::None => "None (no editor-specific config)",
             Self::Neovim => "Neovim (.nvim.lua with automatic folds)",
         }
     }
@@ -178,6 +178,7 @@ impl Answers for InteractiveAnswers {
 struct PlannedFile {
     path: PathBuf,
     contents: String,
+    explanation: Option<String>,
 }
 
 /// One repository-local Git setting init will change.
@@ -305,6 +306,9 @@ fn build_plan(
             root,
             ".gitattributes",
             template::GITATTRIBUTES,
+            Some(
+                "Normalize text files to LF and use Git's Markdown diff driver; this also changes `bureau report` hunk headers.",
+            ),
         );
         add_file(
             &mut files,
@@ -312,6 +316,7 @@ fn build_plan(
             root,
             ".gitignore",
             template::GITIGNORE,
+            Some("Keep editor swap files, OS metadata, and other local noise out of Git."),
         );
         add_file(
             &mut files,
@@ -319,11 +324,19 @@ fn build_plan(
             root,
             ".editorconfig",
             template::EDITORCONFIG,
+            Some("Use UTF-8, LF, and four-space indentation for notes and config files."),
         );
     }
 
     if let Some(path) = editor.config_path() {
-        add_file(&mut files, &mut skipped, root, path, template::NVIM_CONFIG);
+        add_file(
+            &mut files,
+            &mut skipped,
+            root,
+            path,
+            template::NVIM_CONFIG,
+            Some("Add automatic Markdown folds to Neovim for this repository only."),
+        );
     }
 
     if tutorial {
@@ -335,7 +348,13 @@ fn build_plan(
             template::TUTORIAL,
             &[("CREATION_DATE", creation_date.as_str())],
         );
-        add_existing_or_new(&mut files, &mut skipped, path, contents);
+        add_existing_or_new(
+            &mut files,
+            &mut skipped,
+            path,
+            contents,
+            Some("Create a tutorial dossier with an open checklist.".to_owned()),
+        );
     }
 
     let mut config = Vec::new();
@@ -386,8 +405,15 @@ fn add_file(
     root: &Path,
     relative: &str,
     contents: &str,
+    explanation: Option<&str>,
 ) {
-    add_existing_or_new(files, skipped, root.join(relative), contents.to_owned());
+    add_existing_or_new(
+        files,
+        skipped,
+        root.join(relative),
+        contents.to_owned(),
+        explanation.map(String::from),
+    );
 }
 
 /// Add a file, unless it is already there.
@@ -396,11 +422,16 @@ fn add_existing_or_new(
     skipped: &mut Vec<PathBuf>,
     path: PathBuf,
     contents: String,
+    explanation: Option<String>,
 ) {
     if path.exists() {
         skipped.push(path);
     } else {
-        files.push(PlannedFile { path, contents });
+        files.push(PlannedFile {
+            path,
+            contents,
+            explanation,
+        });
     }
 }
 
@@ -488,6 +519,9 @@ fn summary(plan: &Plan, cwd: &Path, palette: Palette) -> String {
             "  {}",
             palette.quoted(&new_command::shown_from(&file.path, Some(cwd)))
         );
+        if let Some(explanation) = &file.explanation {
+            let _ = writeln!(output, "    {}", palette.context().paint(explanation));
+        }
     }
 
     if !plan.skipped.is_empty() {
@@ -712,6 +746,7 @@ mod tests {
             files: vec![PlannedFile {
                 path: PathBuf::from("/notes/.gitattributes"),
                 contents: String::new(),
+                explanation: Some("Because it matters.".to_owned()),
             }],
             skipped: vec![PathBuf::from("/notes/.gitignore")],
             config: vec![ConfigChange {
@@ -724,7 +759,13 @@ mod tests {
 
         assert_eq!(
             summary(&plan, Path::new("/notes"), Palette::OFF),
-            "Repository: '.'\nFiles to create:\n  '.gitattributes'\nFiles left alone (already exist):\n  '.gitignore'\nGit configuration to change:\n  core.quotepath = false\n"
+            "Repository: '.'\nFiles to create:\n  '.gitattributes'\n    Because it matters.\nFiles left alone (already exist):\n  '.gitignore'\nGit configuration to change:\n  core.quotepath = false\n"
+        );
+
+        assert!(
+            summary(&plan, Path::new("/notes"), Palette::ON)
+                .contains("\x1b[2mBecause it matters.\x1b[0m"),
+            "the explanation should be dim"
         );
     }
 
@@ -744,7 +785,7 @@ mod tests {
 
     #[test]
     fn the_editor_choices_say_what_they_write() {
-        assert!(Editor::None.label().contains("no editor config"));
+        assert!(Editor::None.label().contains("no editor-specific config"));
         assert!(Editor::Neovim.label().contains(".nvim.lua"));
         assert!(EDITOR_CONTEXT.contains("None"));
         assert!(EDITOR_CONTEXT.contains(".nvim.lua"));

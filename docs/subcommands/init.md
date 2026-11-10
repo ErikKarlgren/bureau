@@ -39,8 +39,9 @@ run fails with a clear message instead of choosing defaults.
 5. **Recommended setup.** `.gitattributes`, `.gitignore`, `.editorconfig` and
    the local Git settings below.
 
-Before anything is written, the command prints the files it will add and the
-Git settings it will change, then asks for confirmation.
+Before anything is written, the command prints the files it will add, a short
+dim explanation under each file, and the Git settings it will change, then
+asks for confirmation.
 
 ## Files
 
