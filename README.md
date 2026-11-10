@@ -7,7 +7,7 @@ Git-based Work Dossiers for Legacy Systems
 
 ## Installation
 ```bash
-cargo install --path .
+cargo install --frozen --path .
 ```
 
 ## Usage
