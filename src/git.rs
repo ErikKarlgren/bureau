@@ -978,12 +978,24 @@ mod tests {
 
         let scratch = repository("git-discover");
         let root = scratch.path().canonicalize().unwrap();
-        assert_eq!(discover(root.as_path()).unwrap(), Some(root.clone()));
+
+        // `git rev-parse` prints the path git's way, with `/` separators, while
+        // `canonicalize` on Windows answers with a `\\?\` verbatim path. Both
+        // name the same directory, so the two are compared in one spelling.
+        let canonical = |path: &Path| path.canonicalize().unwrap();
+        assert_eq!(
+            discover(root.as_path())
+                .unwrap()
+                .map(|path| canonical(&path)),
+            Some(root.clone())
+        );
 
         let subdirectory = root.join("sub");
         fs::create_dir_all(&subdirectory).unwrap();
         assert_eq!(
-            discover(subdirectory.as_path()).unwrap(),
+            discover(subdirectory.as_path())
+                .unwrap()
+                .map(|path| canonical(&path)),
             Some(root.clone())
         );
 
@@ -993,7 +1005,9 @@ mod tests {
             &["worktree", "add", "-q", "linked", "-b", "linked-branch"],
         );
         assert_eq!(
-            discover(worktree.as_path()).unwrap(),
+            discover(worktree.as_path())
+                .unwrap()
+                .map(|path| canonical(&path)),
             Some(worktree.canonicalize().unwrap())
         );
 
