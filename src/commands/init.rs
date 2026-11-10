@@ -699,6 +699,18 @@ fn summary(plan: &Plan, cwd: &Path, palette: Palette) -> String {
         );
     }
 
+    if !plan.files.is_empty() {
+        let _ = writeln!(
+            output,
+            "{} {} {}",
+            palette.heading().paint("Commit to create:"),
+            palette.quoted("init: set up bureau"),
+            palette
+                .context()
+                .paint(&format!("({})", count(plan.files.len(), "file")))
+        );
+    }
+
     output
 }
 
@@ -955,7 +967,7 @@ mod tests {
 
         assert_eq!(
             summary(&plan, Path::new("/notes"), Palette::OFF),
-            "Repository: '.'\nFiles to create:\n  '.gitattributes'\n    Because it matters.\nFiles left alone (already exist):\n  '.gitignore'\nGit configuration to change:\n  core.quotepath = false\n"
+            "Repository: '.'\nFiles to create:\n  '.gitattributes'\n    Because it matters.\nFiles left alone (already exist):\n  '.gitignore'\nGit configuration to change:\n  core.quotepath = false\nCommit to create: 'init: set up bureau' (1 file)\n"
         );
 
         let coloured = summary(&plan, Path::new("/notes"), Palette::ON);
@@ -1316,7 +1328,7 @@ mod tests {
         scratch
             .write(
                 "note.md",
-                "# Title\n## Before\n~~~text\n```\n# not a heading\n~~~\n## After\nText.\n    ```\n# indented heading\nText.\n",
+                "# Title\n## Before\n~~~text\n```\n# not a heading\n~~~\n## After\nText.\n    ```\n# indented heading\nText.\n## Nesting\n- parent\n  - child\n    - grandchild\n- sibling\n####### not a heading\n#\nText.\n",
             )
             .unwrap();
         scratch
@@ -1324,9 +1336,14 @@ mod tests {
                 "check.lua",
                 r#"assert(vim.wo.foldmethod == "expr", "foldmethod=" .. vim.wo.foldmethod)
 assert(vim.wo.foldlevel == 99, "foldlevel=" .. vim.wo.foldlevel)
-local expected = { ">1", ">2", "2", "2", "2", "2", ">2", "2", "3", ">1", "1" }
+local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h")
+local hash = vim.fn.sha256(vim.fs.normalize(root)):sub(1, 16)
+local fold = _G["bureau_notes_fold_" .. hash]
+assert(type(fold) == "function", "per-repository fold function is missing")
+assert(vim.wo.foldexpr:match("bureau_notes_fold_") ~= nil, "foldexpr is not per-repository")
+local expected = { ">1", ">2", "2", "2", "2", "2", ">2", "2", "3", ">1", "1", ">2", "2", "3", "4", "2", "2", ">1", "1" }
 for index, value in ipairs(expected) do
-  local got = _G.bureau_notes_fold(index)
+  local got = fold(index)
   assert(got == value, "line " .. index .. " expected " .. value .. " got " .. tostring(got))
 end
 vim.cmd("edit .nvim.lua")

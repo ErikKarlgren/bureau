@@ -17,9 +17,11 @@
 local source = debug.getinfo(1, "S").source:sub(2)
 local root = vim.fs.normalize(vim.fn.fnamemodify(source, ":p:h"))
 
--- A fixed group name plus `clear = true` would let a second bureau repository
--- delete the autocmds of the first one in the same session.
-local group_name = "BureauNotes_" .. vim.fn.sha256(root):sub(1, 16)
+-- Name both the augroup and the fold function after the repository, so two
+-- bureau repositories in one session do not overwrite each other.
+local hash = vim.fn.sha256(root):sub(1, 16)
+local group_name = "BureauNotes_" .. hash
+local fold_function = "bureau_notes_fold_" .. hash
 local group = vim.api.nvim_create_augroup(group_name, { clear = true })
 
 -- The width of a run of leading whitespace, with a tab advancing to the next
@@ -74,36 +76,62 @@ local function fence_run(line)
     return character, #run, rest:sub(#run + 1)
 end
 
--- One fold level per line: headings set the base level, indentation adds one
--- level per four columns. Fenced code blocks are kept out of the calculation.
+-- One fold level per line: headings set the base level, and indentation nests
+-- relative to the lines above it, the way `bureau tasks` nests bullets.
 local function fold_levels(buffer)
     local lines = vim.api.nvim_buf_get_lines(buffer, 0, -1, false)
     local levels = {}
     local heading = 1
     local fence_character = nil
     local fence_length = 0
+    local fence_level = 0
+    local indents = { 0 }
+    local content_level = 0
+
+    -- The nesting depth of an indent, whatever width the note uses.
+    local function level_of(indent)
+        while #indents > 1 and indent < indents[#indents] do
+            table.remove(indents)
+        end
+        if indent > indents[#indents] then
+            table.insert(indents, indent)
+        end
+        return #indents - 1
+    end
 
     for index, line in ipairs(lines) do
         local character, length, after = fence_run(line)
 
         if fence_character then
+            local inside_level = fence_level
+
             -- A closing fence uses the same character, is at least as long as the
             -- opening one, and has nothing but whitespace after it.
             if character == fence_character and length >= fence_length and after:match("^%s*$") then
                 fence_character, fence_length = nil, 0
+                fence_level = 0
             end
-            levels[index] = tostring(heading)
+            levels[index] = tostring(math.min(heading + inside_level, 20))
         elseif character then
             fence_character, fence_length = character, length
-            levels[index] = tostring(heading)
+            local whitespace = line:match("^%s*") or ""
+            content_level = level_of(columns(whitespace))
+            fence_level = content_level
+            levels[index] = tostring(math.min(heading + fence_level, 20))
         else
-            local hashes = line:match("^(#+)%s")
-            if hashes then
+            local hashes = line:match("^(#+)%s") or line:match("^(#+)$")
+            if hashes and #hashes <= 6 then
                 heading = #hashes
+                indents = { 0 }
+                content_level = 0
+                fence_level = 0
                 levels[index] = ">" .. heading
+            elseif line:match("^%s*$") then
+                levels[index] = tostring(math.min(heading + content_level, 20))
             else
                 local whitespace = line:match("^%s*") or ""
-                levels[index] = tostring(math.min(heading + math.floor(columns(whitespace) / 4), 20))
+                content_level = level_of(columns(whitespace))
+                levels[index] = tostring(math.min(heading + content_level, 20))
             end
         end
     end
@@ -113,7 +141,7 @@ end
 
 -- `foldexpr` is evaluated for every line, so cache the computed levels until
 -- the buffer changes.
-function _G.bureau_notes_fold(lnum)
+_G[fold_function] = function(lnum)
     local buffer = vim.api.nvim_get_current_buf()
     local tick = vim.api.nvim_buf_get_changedtick(buffer)
     local cache = vim.b.bureau_notes_folds
@@ -150,7 +178,7 @@ local function apply()
 
     -- Folds are computed from the note itself, not from a plugin.
     vim.wo.foldmethod = "expr"
-    vim.wo.foldexpr = "v:lua.bureau_notes_fold(v:lnum)"
+    vim.wo.foldexpr = "v:lua." .. fold_function .. "(v:lnum)"
     -- Keep every fold open by default; use `zM` to close them all, `zo`/`zc` to
     -- open or close one. Set this to 2 to fold `###` subsections and nested
     -- lists as soon as the file opens.

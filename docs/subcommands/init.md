@@ -46,8 +46,9 @@ complete. It then asks only about things that are missing or optional.
 
 If the repository is already fully configured, the command prints that there
 is nothing to do and exits without asking for a confirmation. Otherwise it
-prints the files it will add, a short dim explanation under each file, and the
-Git settings it will change, then asks for confirmation.
+prints the files it will add, a short dim explanation under each file, the Git
+settings it will change, and the commit it will create when files are added,
+then asks for confirmation.
 
 ## Files
 
