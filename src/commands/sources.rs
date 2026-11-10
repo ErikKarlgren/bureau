@@ -207,6 +207,17 @@ pub fn relative<'a>(path: &'a Path, root: &Path) -> &'a Path {
     path.strip_prefix(root).unwrap_or(path)
 }
 
+/// [`relative`] as text, with `/` for every separator.
+///
+/// Every path bureau prints is written this way, so the same line comes out on
+/// either platform and a path copied out of it works in git and in a link.
+#[must_use]
+pub fn relative_text(path: &Path, root: &Path) -> String {
+    relative(path, root)
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/")
+}
+
 /// A file's name, extension included.
 #[must_use]
 pub fn file_name(path: &Path) -> String {

@@ -70,7 +70,7 @@ fn run_in(
     let dossiers = sources::read_dossiers(&mut files, root)?;
     let dossier = select(&dossiers, args)?;
     let name = worklog::stem(&dossier);
-    let chosen_shown = sources::relative(&dossier, root).display().to_string();
+    let chosen_shown = sources::relative_text(&dossier, root);
 
     // Everything that can fail is done before the prompt, so a dossier that
     // cannot take a worklog never costs the user the line they typed.
@@ -82,7 +82,7 @@ fn run_in(
     let entry_path = root.join(ENTRIES_DIR).join(format!("{date}.md"));
     let entry_exists = entry_path.exists();
     let entry = entry_contents(&entry_path, date)?;
-    let entry_shown_text = sources::relative(&entry_path, root).display().to_string();
+    let entry_shown_text = sources::relative_text(&entry_path, root);
 
     // Preview what is already on disk before asking for the line. The new line
     // is not in this diff: it does not exist yet.
@@ -251,8 +251,8 @@ fn commit_worklog(
     out: &mut impl Write,
     err: &mut impl Write,
 ) -> Result<bool> {
-    let chosen_shown = sources::relative(dossier, root).display().to_string();
-    let entry_shown = sources::relative(entry_path, root).display().to_string();
+    let chosen_shown = sources::relative_text(dossier, root);
+    let entry_shown = sources::relative_text(entry_path, root);
 
     match git::commit(
         root,
