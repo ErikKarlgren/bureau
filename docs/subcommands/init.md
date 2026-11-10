@@ -21,27 +21,33 @@ Run it from the directory that should hold the notes, or from any directory
 inside an existing notes repository. There are no flags yet; a non-interactive
 run fails with a clear message instead of choosing defaults.
 
-## What it asks
+## What it does
+
+It first reports what it found: whether the current directory is already a Git
+repository, the configured Git author, whether `.nvim.lua` is present, whether
+the repository already has dossiers, and whether the recommended setup is
+complete. It then asks only about things that are missing or optional.
 
 1. **Initialize repository?** Only when the current directory is not inside a
    Git repository.
-2. **Your name and email.** These are written to `.git/config` (`git config
-   --local`) unless the effective value is already the same. They are what
-   makes the first commit possible.
-3. **Editor configuration.** `None` is the default unless `$EDITOR` names
-   `nvim` or `neovim`. The picker labels say that Neovim adds a
-   repository-local `.nvim.lua` with automatic folds, and that `None` adds no
-   editor-specific config. Neovim is the only editor config supported in this
-   version; VS Code and Obsidian users can leave it as `None` and still get
-   `.editorconfig`.
-4. **Welcome dossier.** Defaults to yes when the repository has no dossiers,
-   and no when it already has notes.
-5. **Recommended setup.** `.gitattributes`, `.gitignore`, `.editorconfig` and
-   the local Git settings below.
+2. **Your name and email.** If both are already configured, the command prints
+   the author and does not ask. If either is missing, it asks for both, with
+   the existing value as the default.
+3. **Editor configuration.** Only when `.nvim.lua` is missing. `None` is the
+   default unless `$EDITOR` names `nvim` or `neovim`. The picker labels say
+   that Neovim adds a repository-local `.nvim.lua` with automatic folds, and
+   that `None` adds no editor-specific config.
+4. **Welcome dossier.** Only when the repository has neither a tutorial
+   dossier nor any other dossier. If it already has one, or already has notes,
+   the command says so and skips the question.
+5. **Recommended setup.** Only when at least one recommended file or local Git
+   setting is missing. If everything is already in place, it says so and skips
+   the question.
 
-Before anything is written, the command prints the files it will add, a short
-dim explanation under each file, and the Git settings it will change, then
-asks for confirmation.
+If the repository is already fully configured, the command prints that there
+is nothing to do and exits without asking for a confirmation. Otherwise it
+prints the files it will add, a short dim explanation under each file, and the
+Git settings it will change, then asks for confirmation.
 
 ## Files
 
@@ -76,8 +82,10 @@ extension or plugin.
 ### `.nvim.lua`
 
 Only written when Neovim is chosen, and only when the file does not already
-exist. It contains a `foldexpr` that combines Markdown heading levels with
-list indentation, applies to Markdown buffers under the repository, and leaves
+exist. If it exists, the command reports it and leaves it alone instead of
+asking which editor to use. It contains a `foldexpr` that combines Markdown
+heading levels with list indentation, applies to Markdown buffers under the
+repository, and leaves
 other windows' fold settings alone. Folds start open (`foldlevel=99`).
 
 Neovim reads this file only when `exrc` is enabled and the file is trusted.

@@ -26,13 +26,15 @@ bureau doctor
 ```
 
 `bureau init` sets up a repository in the current directory, or uses the
-repository already there. It asks for the author name and email, offers a
-Neovim `.nvim.lua` with automatic folds, optionally creates
+repository already there. It checks the author name and email, asking only
+when they are missing, offers a Neovim `.nvim.lua` with automatic folds when
+one is not already present, optionally creates
 `dossiers/0000 - welcome to bureau.md` as a tutorial, and writes
 `.gitattributes`, `.gitignore` and `.editorconfig`. It applies a few
 repository-local Git settings with `git config --local` (not a root
 `.gitconfig`, which Git would ignore) and commits only the files it created.
-Re-running it is safe: existing files are left alone. The exact rules live in
+Re-running it is safe: existing files are left alone, and it only prompts for
+pieces that are still missing. The exact rules live in
 [`docs/subcommands/init.md`](docs/subcommands/init.md).
 
 Dossiers are written to `dossiers/<name>.md` and daily entries to

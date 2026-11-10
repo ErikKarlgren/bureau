@@ -21,6 +21,25 @@ use crate::template;
 /// The dossier name the tutorial is stored under.
 const TUTORIAL_NAME: &str = "0000 - welcome to bureau";
 
+/// The files `bureau init` recommends, with their template and explanation.
+const RECOMMENDED_FILES: [(&str, &str, &str); 3] = [
+    (
+        ".gitattributes",
+        template::GITATTRIBUTES,
+        "Normalize text files to LF and use Git's Markdown diff driver; this also changes `bureau report` hunk headers.",
+    ),
+    (
+        ".gitignore",
+        template::GITIGNORE,
+        "Keep editor swap files, OS metadata, and other local noise out of Git.",
+    ),
+    (
+        ".editorconfig",
+        template::EDITORCONFIG,
+        "Use UTF-8, LF, and four-space indentation for notes and config files.",
+    ),
+];
+
 /// What the tutorial and editor prompts say.
 const TUTORIAL_HINT: &str = "(a dossier to teach you about bureau)";
 const EDITOR_HINT: &str = "(optional; None is fine for VS Code, Obsidian, etc.)";
@@ -232,44 +251,53 @@ fn run_in(
 ) -> Result<()> {
     let existing = git::discover(cwd)?;
     let needs_init = existing.is_none();
-
-    if needs_init && !answers.initialize()? {
-        println!("Nothing was changed.");
-        return Ok(());
-    }
-
     let root = existing.unwrap_or_else(|| cwd.to_path_buf());
+    let shown_root = shown_directory(&root, cwd);
 
-    if !needs_init && root != cwd {
+    if needs_init {
         println!(
-            "Using existing repository at {}",
-            palette.quoted(&shown_directory(&root, cwd))
+            "No Git repository found at {}.",
+            palette.quoted(&shown_root)
+        );
+
+        if !answers.initialize()? {
+            println!("Nothing was changed.");
+            return Ok(());
+        }
+    } else {
+        println!(
+            "Using existing Git repository at {}.",
+            palette.quoted(&shown_root)
         );
     }
 
-    let current_name = git::config_get(&root, "user.name")?;
-    let current_email = git::config_get(&root, "user.email")?;
-    let (name, email) = answers.identity(current_name.as_deref(), current_email.as_deref())?;
-    let identity = Identity {
-        name: name.trim().to_owned(),
-        email: email.trim().to_owned(),
-        current_name,
-        current_email,
-    };
+    let (identity, identity_pending) = resolve_identity(&root, palette, answers)?;
 
     if identity.name.is_empty() || identity.email.is_empty() {
         bail!("a name and an email are required to make the first commit");
     }
 
-    let editor = answers.editor(default_editor())?;
-    let has_dossiers = !sources::markdown_paths(&root, DOSSIERS_DIR)?.is_empty();
-    let tutorial = answers.tutorial(!has_dossiers)?;
-    let recommended = answers.recommended()?;
+    let mut pending = identity_pending;
+    let (editor, editor_pending) = resolve_editor(&root, palette, answers)?;
+    pending |= editor_pending;
+    let (tutorial, tutorial_pending) = resolve_tutorial(&root, palette, answers)?;
+    pending |= tutorial_pending;
+    let (recommended, recommended_pending) = resolve_recommended(&root, palette, answers)?;
+    pending |= recommended_pending;
 
     let plan = build_plan(&root, needs_init, &identity, editor, tutorial, recommended)?;
 
     if plan.files.is_empty() && plan.config.is_empty() && !plan.needs_init {
-        println!("Nothing to change.");
+        if pending {
+            println!("Nothing was changed.");
+        } else {
+            println!(
+                "{}",
+                palette
+                    .heading()
+                    .paint("Repository is already set up; nothing to do.")
+            );
+        }
         return Ok(());
     }
 
@@ -281,6 +309,113 @@ fn run_in(
     }
 
     apply(&plan, cwd, palette, prompt_palette)
+}
+
+/// Read the configured author, or ask for the missing parts.
+fn resolve_identity(
+    root: &Path,
+    palette: Palette,
+    answers: &mut impl Answers,
+) -> Result<(Identity, bool)> {
+    let current_name = git::config_get(root, "user.name")?;
+    let current_email = git::config_get(root, "user.email")?;
+
+    if let (Some(name), Some(email)) = (&current_name, &current_email) {
+        println!(
+            "Git author: {name} <{email}> {}",
+            palette.context().paint("(already configured).")
+        );
+
+        Ok((
+            Identity {
+                name: name.clone(),
+                email: email.clone(),
+                current_name,
+                current_email,
+            },
+            false,
+        ))
+    } else {
+        println!("Git author: incomplete.");
+        let (name, email) = answers.identity(current_name.as_deref(), current_email.as_deref())?;
+
+        Ok((
+            Identity {
+                name: name.trim().to_owned(),
+                email: email.trim().to_owned(),
+                current_name,
+                current_email,
+            },
+            true,
+        ))
+    }
+}
+
+/// Decide whether to write an editor config, asking only when none exists.
+fn resolve_editor(
+    root: &Path,
+    palette: Palette,
+    answers: &mut impl Answers,
+) -> Result<(Editor, bool)> {
+    let nvim_config = Editor::Neovim.config_path().unwrap_or(".nvim.lua");
+
+    if root.join(nvim_config).exists() {
+        println!(
+            "{}",
+            palette.context().paint(&format!(
+                "Editor config: {nvim_config} already present; leaving it alone."
+            ))
+        );
+        Ok((Editor::None, false))
+    } else {
+        Ok((answers.editor(default_editor())?, true))
+    }
+}
+
+/// Decide whether to create the welcome dossier, asking only when it is useful.
+fn resolve_tutorial(
+    root: &Path,
+    palette: Palette,
+    answers: &mut impl Answers,
+) -> Result<(bool, bool)> {
+    if tutorial_path(root).exists() {
+        println!(
+            "{}",
+            palette
+                .context()
+                .paint("Welcome dossier: already present; leaving it alone.")
+        );
+        Ok((false, false))
+    } else if !sources::markdown_paths(root, DOSSIERS_DIR)?.is_empty() {
+        println!(
+            "{}",
+            palette
+                .context()
+                .paint("Welcome dossier: skipped; this repository already has dossiers.")
+        );
+        Ok((false, false))
+    } else {
+        Ok((answers.tutorial(true)?, true))
+    }
+}
+
+/// Decide whether to apply the recommended setup, asking only when it is incomplete.
+fn resolve_recommended(
+    root: &Path,
+    palette: Palette,
+    answers: &mut impl Answers,
+) -> Result<(bool, bool)> {
+    if recommended_setup_needed(root)? {
+        Ok((answers.recommended()?, true))
+    } else {
+        println!(
+            "{}",
+            palette
+                .context()
+                .paint("Recommended setup: already in place.")
+        );
+        Ok((false, false))
+    }
 }
 
 /// What the plan should contain, given the answers.
@@ -296,32 +431,16 @@ fn build_plan(
     let mut skipped = Vec::new();
 
     if recommended {
-        add_file(
-            &mut files,
-            &mut skipped,
-            root,
-            ".gitattributes",
-            template::GITATTRIBUTES,
-            Some(
-                "Normalize text files to LF and use Git's Markdown diff driver; this also changes `bureau report` hunk headers.",
-            ),
-        );
-        add_file(
-            &mut files,
-            &mut skipped,
-            root,
-            ".gitignore",
-            template::GITIGNORE,
-            Some("Keep editor swap files, OS metadata, and other local noise out of Git."),
-        );
-        add_file(
-            &mut files,
-            &mut skipped,
-            root,
-            ".editorconfig",
-            template::EDITORCONFIG,
-            Some("Use UTF-8, LF, and four-space indentation for notes and config files."),
-        );
+        for (relative, contents, explanation) in RECOMMENDED_FILES {
+            add_file(
+                &mut files,
+                &mut skipped,
+                root,
+                relative,
+                contents,
+                Some(explanation),
+            );
+        }
     }
 
     if let Some(path) = editor.config_path() {
@@ -336,9 +455,7 @@ fn build_plan(
     }
 
     if tutorial {
-        let path = root
-            .join(DOSSIERS_DIR)
-            .join(dossier::name_to_filename(TUTORIAL_NAME));
+        let path = tutorial_path(root);
         let creation_date = now();
         let contents = template::render(
             template::TUTORIAL,
@@ -369,18 +486,7 @@ fn build_plan(
     }
 
     if recommended {
-        add_config(&mut config, root, "core.quotepath", "false")?;
-        add_config(&mut config, root, "core.autocrlf", "false")?;
-        add_config(&mut config, root, "diff.algorithm", "histogram")?;
-
-        let version = git::version(root)?;
-        let conflict_style = if version >= (2, 35) {
-            "zdiff3"
-        } else {
-            "diff3"
-        };
-        add_config(&mut config, root, "merge.conflictStyle", conflict_style)?;
-        add_config(&mut config, root, "fetch.writeCommitGraph", "true")?;
+        config.extend(recommended_config(root)?);
     }
 
     Ok(Plan {
@@ -392,6 +498,46 @@ fn build_plan(
         editor,
         tutorial,
     })
+}
+
+/// The path of the welcome dossier.
+fn tutorial_path(root: &Path) -> PathBuf {
+    root.join(DOSSIERS_DIR)
+        .join(dossier::name_to_filename(TUTORIAL_NAME))
+}
+
+/// The recommended files that are not in the repository yet.
+fn missing_recommended_files(root: &Path) -> Vec<&'static str> {
+    RECOMMENDED_FILES
+        .iter()
+        .map(|(relative, _, _)| *relative)
+        .filter(|relative| !root.join(relative).exists())
+        .collect()
+}
+
+/// The recommended local Git settings that are not in place yet.
+fn recommended_config(root: &Path) -> Result<Vec<ConfigChange>> {
+    let mut config = Vec::new();
+
+    add_config(&mut config, root, "core.quotepath", "false")?;
+    add_config(&mut config, root, "core.autocrlf", "false")?;
+    add_config(&mut config, root, "diff.algorithm", "histogram")?;
+
+    let version = git::version(root)?;
+    let conflict_style = if version >= (2, 35) {
+        "zdiff3"
+    } else {
+        "diff3"
+    };
+    add_config(&mut config, root, "merge.conflictStyle", conflict_style)?;
+    add_config(&mut config, root, "fetch.writeCommitGraph", "true")?;
+
+    Ok(config)
+}
+
+/// Whether any recommended file or setting is missing.
+fn recommended_setup_needed(root: &Path) -> Result<bool> {
+    Ok(!missing_recommended_files(root).is_empty() || !recommended_config(root)?.is_empty())
 }
 
 /// Add a file with a known contents, unless it is already there.
@@ -622,10 +768,7 @@ fn apply(plan: &Plan, cwd: &Path, palette: Palette, warning_palette: Palette) ->
         println!(
             "Read {} to get started.",
             palette.quoted(&new_command::shown_from(
-                &plan
-                    .root
-                    .join(DOSSIERS_DIR)
-                    .join(dossier::name_to_filename(TUTORIAL_NAME)),
+                &tutorial_path(&plan.root),
                 Some(cwd),
             ))
         );
@@ -672,6 +815,16 @@ mod tests {
         }
     }
 
+    /// A prompt a test can check was asked.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Prompt {
+        Identity,
+        Editor,
+        Tutorial,
+        Recommended,
+        Confirm,
+    }
+
     /// Answers that a test decides in advance.
     struct TestAnswers {
         initialize: Answer,
@@ -682,6 +835,7 @@ mod tests {
         tutorial_default: Option<bool>,
         recommended: Answer,
         confirm: Answer,
+        asked: Vec<Prompt>,
     }
 
     impl TestAnswers {
@@ -695,7 +849,13 @@ mod tests {
                 tutorial_default: None,
                 recommended: Answer::Yes,
                 confirm: Answer::Yes,
+                asked: Vec::new(),
             }
+        }
+
+        /// Whether `prompt` was asked.
+        fn asked(&self, prompt: Prompt) -> bool {
+            self.asked.contains(&prompt)
         }
     }
 
@@ -709,29 +869,64 @@ mod tests {
             _name: Option<&str>,
             _email: Option<&str>,
         ) -> Result<(String, String)> {
+            self.asked.push(Prompt::Identity);
             Ok((self.name.clone(), self.email.clone()))
         }
 
         fn editor(&mut self, _default: Editor) -> Result<Editor> {
+            self.asked.push(Prompt::Editor);
             Ok(self.editor)
         }
 
         fn tutorial(&mut self, default: bool) -> Result<bool> {
+            self.asked.push(Prompt::Tutorial);
             self.tutorial_default = Some(default);
             Ok(self.tutorial.is_yes())
         }
 
         fn recommended(&mut self) -> Result<bool> {
+            self.asked.push(Prompt::Recommended);
             Ok(self.recommended.is_yes())
         }
 
         fn confirm(&mut self) -> Result<bool> {
+            self.asked.push(Prompt::Confirm);
             Ok(self.confirm.is_yes())
         }
     }
 
     fn run(scratch: &Scratch, answers: &mut TestAnswers) -> Result<()> {
         run_in(scratch.path(), Palette::OFF, Palette::OFF, answers)
+    }
+
+    /// Put the recommended local Git settings in `scratch`.
+    fn configure_recommended(scratch: &Scratch) {
+        scratch.git(&["config", "core.quotepath", "false"]);
+        scratch.git(&["config", "core.autocrlf", "false"]);
+        scratch.git(&["config", "diff.algorithm", "histogram"]);
+
+        let conflict = if git::version(scratch.path()).unwrap() >= (2, 35) {
+            "zdiff3"
+        } else {
+            "diff3"
+        };
+        scratch.git(&["config", "merge.conflictStyle", conflict]);
+        scratch.git(&["config", "fetch.writeCommitGraph", "true"]);
+    }
+
+    /// Write the files an initialized repository already has.
+    fn write_existing_notes(scratch: &Scratch) {
+        scratch.write(".gitattributes", "").unwrap();
+        scratch.write(".gitignore", "").unwrap();
+        scratch.write(".editorconfig", "").unwrap();
+        scratch
+            .write(
+                "dossiers/0000 - welcome to bureau.md",
+                "# 0000 - welcome to bureau
+## Worklog
+",
+            )
+            .unwrap();
     }
 
     #[test]
@@ -823,9 +1018,17 @@ mod tests {
                 .trim(),
             "false"
         );
-        assert_eq!(
-            scratch.git_output(&["config", "--get", "user.name"]).trim(),
-            "Bureau"
+        assert!(
+            !scratch
+                .git_output(&["config", "--get", "user.name"])
+                .trim()
+                .is_empty()
+        );
+        assert!(
+            !scratch
+                .git_output(&["config", "--get", "user.email"])
+                .trim()
+                .is_empty()
         );
         assert_eq!(
             scratch
@@ -833,6 +1036,10 @@ mod tests {
                 .trim(),
             "true"
         );
+        assert!(answers.asked(Prompt::Editor));
+        assert!(answers.asked(Prompt::Tutorial));
+        assert!(answers.asked(Prompt::Recommended));
+        assert!(answers.asked(Prompt::Confirm));
 
         let attributes = scratch.read(".gitattributes").unwrap();
         assert!(attributes.contains("* text=auto eol=lf"), "{attributes}");
@@ -932,7 +1139,7 @@ mod tests {
     }
 
     #[test]
-    fn a_repository_with_notes_keeps_the_tutorial_default_off() {
+    fn a_repository_with_notes_does_not_ask_for_the_tutorial() {
         let scratch = Scratch::new("init-existing-notes").unwrap();
         scratch
             .write("dossiers/1 - here.md", "# 1\n## Worklog\n")
@@ -942,13 +1149,76 @@ mod tests {
 
         run(&scratch, &mut answers).unwrap();
 
-        assert_eq!(answers.tutorial_default, Some(false));
+        assert!(!answers.asked(Prompt::Tutorial));
+        assert_eq!(answers.tutorial_default, None);
         assert!(
             !scratch
                 .path()
                 .join("dossiers/0000 - welcome to bureau.md")
                 .exists()
         );
+    }
+
+    #[test]
+    fn a_fully_configured_repository_is_a_no_op() {
+        let scratch = Scratch::new("init-complete").unwrap();
+        scratch.init_git();
+        configure_recommended(&scratch);
+        write_existing_notes(&scratch);
+        scratch.write(".nvim.lua", "").unwrap();
+
+        let mut answers = TestAnswers::new();
+        run(&scratch, &mut answers).unwrap();
+
+        assert!(!answers.asked(Prompt::Identity));
+        assert!(!answers.asked(Prompt::Editor));
+        assert!(!answers.asked(Prompt::Tutorial));
+        assert!(!answers.asked(Prompt::Recommended));
+        assert!(!answers.asked(Prompt::Confirm));
+    }
+
+    #[test]
+    fn only_the_missing_editor_config_is_asked_for() {
+        let scratch = Scratch::new("init-only-editor").unwrap();
+        scratch.init_git();
+        configure_recommended(&scratch);
+        write_existing_notes(&scratch);
+
+        let mut answers = TestAnswers::new();
+        run(&scratch, &mut answers).unwrap();
+
+        assert!(!answers.asked(Prompt::Identity));
+        assert!(answers.asked(Prompt::Editor));
+        assert!(!answers.asked(Prompt::Tutorial));
+        assert!(!answers.asked(Prompt::Recommended));
+        assert!(answers.asked(Prompt::Confirm));
+        assert!(scratch.path().join(".nvim.lua").exists());
+    }
+
+    #[test]
+    fn only_the_missing_recommended_file_is_asked_for() {
+        let scratch = Scratch::new("init-only-recommended").unwrap();
+        scratch.init_git();
+        configure_recommended(&scratch);
+        scratch.write(".gitattributes", "").unwrap();
+        scratch.write(".gitignore", "").unwrap();
+        scratch.write(".nvim.lua", "").unwrap();
+        scratch
+            .write(
+                "dossiers/0000 - welcome to bureau.md",
+                "# 0000 - welcome to bureau\n## Worklog\n",
+            )
+            .unwrap();
+
+        let mut answers = TestAnswers::new();
+        run(&scratch, &mut answers).unwrap();
+
+        assert!(!answers.asked(Prompt::Identity));
+        assert!(!answers.asked(Prompt::Editor));
+        assert!(!answers.asked(Prompt::Tutorial));
+        assert!(answers.asked(Prompt::Recommended));
+        assert!(answers.asked(Prompt::Confirm));
+        assert!(scratch.path().join(".editorconfig").exists());
     }
 
     #[test]
