@@ -113,6 +113,24 @@ mod tests {
         assert!(!rendered.contains('$'), "left a placeholder in: {rendered}");
     }
 
+    /// The repository's own `.editorconfig`, which is not embedded.
+    const REPO_EDITORCONFIG: &str = include_str!("../.editorconfig");
+
+    /// The configuration after the file's header block.
+    fn editorconfig_body(contents: &str) -> &str {
+        contents
+            .split_once("\n\n")
+            .map_or(contents, |(_, body)| body)
+    }
+
+    #[test]
+    fn the_repository_and_generated_editorconfig_share_a_body() {
+        assert_eq!(
+            editorconfig_body(REPO_EDITORCONFIG),
+            editorconfig_body(EDITORCONFIG)
+        );
+    }
+
     #[test]
     fn tutorial_template_only_uses_known_placeholders() {
         let rendered = render(TUTORIAL, &[("CREATION_DATE", "2026-03-23 10:00:00")]);

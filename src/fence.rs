@@ -15,25 +15,29 @@ impl Fence {
     /// The fence `line` opens, if it opens one.
     ///
     /// A fence is three or more backticks or tildes at the start of a line,
-    /// after at most three spaces of indentation. A line that opens a fence is
-    /// not itself content.
+    /// after at most three spaces of indentation. A backtick fence's info
+    /// string may not contain a backtick, so a line such as `` ``` `x` ``` ``
+    /// is prose, not an opening fence. A line that opens a fence is not
+    /// itself content.
     #[must_use]
     pub fn opening(line: &str) -> Option<Self> {
-        let indent = line
-            .len()
-            .saturating_sub(line.trim_start_matches(' ').len());
-        if indent > 3 {
+        let (character, length, info) = split(line)?;
+
+        if character == '`' && info.contains('`') {
             return None;
         }
 
-        let rest = line.get(indent..)?;
-        let character = rest.chars().next()?;
-        if character != '`' && character != '~' {
-            return None;
-        }
+        Some(Self { character, length })
+    }
 
-        let length = rest.chars().take_while(|found| *found == character).count();
-        (length >= 3).then_some(Self { character, length })
+    /// The fence run `line` starts with, whether or not it opens a fence.
+    ///
+    /// This is the indentation and character rule without the info-string
+    /// rule, for a caller that only needs to know how long a run could be,
+    /// such as the report's fence sizing.
+    #[must_use]
+    pub fn run(line: &str) -> Option<(char, usize)> {
+        split(line).map(|(character, length, _)| (character, length))
     }
 
     /// Whether `line` closes this fence.
@@ -42,27 +46,40 @@ impl Fence {
     /// opening one, and has nothing but whitespace after it.
     #[must_use]
     pub fn closes(self, line: &str) -> bool {
-        let indent = line
-            .len()
-            .saturating_sub(line.trim_start_matches(' ').len());
-        if indent > 3 {
-            return false;
-        }
-
-        let Some(rest) = line.get(indent..) else {
+        let Some((character, length, after)) = split(line) else {
             return false;
         };
-        let count = rest
-            .chars()
-            .take_while(|found| *found == self.character)
-            .count();
-        if count < self.length {
-            return false;
-        }
 
-        rest.get(count..)
-            .is_some_and(|after| after.trim().is_empty())
+        character == self.character && length >= self.length && after.trim().is_empty()
     }
+}
+
+/// The fence character, run length and text after the run, for a line that
+/// starts at most three spaces in with three or more fence characters.
+fn split(line: &str) -> Option<(char, usize, &str)> {
+    let indent = line
+        .len()
+        .saturating_sub(line.trim_start_matches(' ').len());
+    if indent > 3 {
+        return None;
+    }
+
+    let rest = line.get(indent..)?;
+    let character = rest.chars().next()?;
+    if character != '`' && character != '~' {
+        return None;
+    }
+
+    let length = rest.chars().take_while(|found| *found == character).count();
+    if length < 3 {
+        return None;
+    }
+
+    // Every counted character is the ASCII fence character, so the character
+    // count is also a byte offset.
+    let after = rest.get(length..)?;
+
+    Some((character, length, after))
 }
 
 #[cfg(test)]
@@ -80,6 +97,16 @@ mod tests {
         assert!(Fence::opening("``").is_none());
         assert!(Fence::opening("    ```").is_none());
         assert!(Fence::opening("text ```").is_none());
+    }
+
+    #[test]
+    fn a_backtick_info_string_may_not_contain_a_backtick() {
+        assert!(Fence::opening("``` `x` ```").is_none());
+        assert!(Fence::opening("~~~ `x`").is_some());
+
+        // `run` still sees the backtick run; it is the opening rule that
+        // rejects the line.
+        assert_eq!(Fence::run("``` `x` ```"), Some(('`', 3)));
     }
 
     #[test]

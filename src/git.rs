@@ -1014,7 +1014,7 @@ mod tests {
             config_get(scratch.path(), "user.name").unwrap().as_deref(),
             Some("bureau")
         );
-        assert_eq!(config_get(scratch.path(), "core.quotepath").unwrap(), None);
+        assert_eq!(config_get(scratch.path(), "bureau.not-set").unwrap(), None);
 
         config_set(scratch.path(), "core.quotepath", "false").unwrap();
         assert_eq!(

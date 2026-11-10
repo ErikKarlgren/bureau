@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 use std::fs;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -317,8 +317,9 @@ fn resolve_identity(
     palette: Palette,
     answers: &mut impl Answers,
 ) -> Result<(Identity, bool)> {
-    let current_name = git::config_get(root, "user.name")?;
-    let current_email = git::config_get(root, "user.email")?;
+    let current_name = git::config_get(root, "user.name")?.filter(|value| !value.trim().is_empty());
+    let current_email =
+        git::config_get(root, "user.email")?.filter(|value| !value.trim().is_empty());
 
     if let (Some(name), Some(email)) = (&current_name, &current_email) {
         println!(
@@ -720,7 +721,11 @@ fn apply(plan: &Plan, cwd: &Path, palette: Palette, warning_palette: Palette) ->
         }
 
         let shown = new_command::shown_from(&file.path, Some(cwd));
-        fs::write(&file.path, &file.contents)
+        fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&file.path)
+            .and_then(|mut handle| handle.write_all(file.contents.as_bytes()))
             .with_context(|| format!("could not write '{shown}'"))?;
         created.push(file.path.clone());
         println!(
@@ -1089,6 +1094,29 @@ mod tests {
     }
 
     #[test]
+    fn a_file_created_after_planning_is_not_overwritten() {
+        let scratch = Scratch::new("init-race").unwrap();
+        scratch.write("late.md", "mine\n").unwrap();
+
+        let plan = Plan {
+            root: scratch.path().to_path_buf(),
+            needs_init: false,
+            files: vec![PlannedFile {
+                path: scratch.path().join("late.md"),
+                contents: "template\n".to_owned(),
+                explanation: None,
+            }],
+            skipped: Vec::new(),
+            config: Vec::new(),
+            editor: Editor::None,
+            tutorial: false,
+        };
+
+        assert!(apply(&plan, scratch.path(), Palette::OFF, Palette::OFF).is_err());
+        assert_eq!(scratch.read("late.md").unwrap(), "mine\n");
+    }
+
+    #[test]
     fn a_declined_apply_changes_nothing() {
         let scratch = Scratch::new("init-cancelled").unwrap();
         let mut answers = TestAnswers::new();
@@ -1175,6 +1203,32 @@ mod tests {
         assert!(!answers.asked(Prompt::Tutorial));
         assert!(!answers.asked(Prompt::Recommended));
         assert!(!answers.asked(Prompt::Confirm));
+    }
+
+    #[test]
+    fn an_empty_configured_identity_is_asked_for() {
+        let scratch = Scratch::new("init-empty-identity").unwrap();
+        scratch.init_git();
+        scratch.git(&["config", "user.name", ""]);
+        scratch.git(&["config", "user.email", ""]);
+        configure_recommended(&scratch);
+        write_existing_notes(&scratch);
+        scratch.write(".nvim.lua", "").unwrap();
+
+        let mut answers = TestAnswers::new();
+        run(&scratch, &mut answers).unwrap();
+
+        assert!(answers.asked(Prompt::Identity));
+        assert_eq!(
+            scratch.git_output(&["config", "--get", "user.name"]).trim(),
+            "Bureau"
+        );
+        assert_eq!(
+            scratch
+                .git_output(&["config", "--get", "user.email"])
+                .trim(),
+            "bureau@example.invalid"
+        );
     }
 
     #[test]
