@@ -542,7 +542,7 @@ fn summary(plan: &Plan, cwd: &Path, palette: Palette) -> String {
     let _ = writeln!(
         output,
         "{}",
-        palette.heading().paint("Git configuration to change:")
+        palette.context().paint("Git configuration to change:")
     );
     if plan.config.is_empty() {
         let _ = writeln!(output, "  {}", palette.context().paint("(none)"));
@@ -551,7 +551,7 @@ fn summary(plan: &Plan, cwd: &Path, palette: Palette) -> String {
         let _ = writeln!(
             output,
             "  {} = {}",
-            palette.heading().paint(&change.key),
+            palette.path().paint(&change.key),
             change.value
         );
     }
@@ -762,10 +762,18 @@ mod tests {
             "Repository: '.'\nFiles to create:\n  '.gitattributes'\n    Because it matters.\nFiles left alone (already exist):\n  '.gitignore'\nGit configuration to change:\n  core.quotepath = false\n"
         );
 
+        let coloured = summary(&plan, Path::new("/notes"), Palette::ON);
         assert!(
-            summary(&plan, Path::new("/notes"), Palette::ON)
-                .contains("\x1b[2mBecause it matters.\x1b[0m"),
+            coloured.contains("\x1b[2mBecause it matters.\x1b[0m"),
             "the explanation should be dim"
+        );
+        assert!(
+            coloured.contains("\x1b[36mcore.quotepath\x1b[0m = false"),
+            "the config key should be cyan: {coloured:?}"
+        );
+        assert!(
+            !coloured.contains("\x1b[1mcore.quotepath"),
+            "the config key should not be bold: {coloured:?}"
         );
     }
 
