@@ -149,6 +149,7 @@
 
 - [ ] Rework the `README.md` to make it easier to understand to other people how `bureau` is meant to be used. Mention how the repo owner uses it with neovim+telescope, and how it should also work fine with vscode (ctrl-p toquickly switch between files, etc) and other code editors.
       - Mention too how the tool has been mostly vibecoded with Deepseek (because the implementation doesn't interest me thaaaat much in comparison to other personal projects, although it does a bit), but how at the same time it's meant for manual workflows
+      - Make the small dependency footprint a selling point: five direct dependencies (anyhow, chrono, clap, dialoguer, sanitise-file-name) and 68 crates in `Cargo.lock`, so a cold `cargo build --release` takes seconds and `cargo install` is not a coffee break. The whole point is that a single self-contained binary drops into a notes repository without dragging a toolchain-sized dependency tree behind it.
       - The repo owner shall write the readme themselves and manually, so the LLM must simply help them brainstorm, structure the file and fix typos and wording issues
       - This tool should also work well enough with Obsidian, Joplin, ... right?
 - [ ] Add a logo to the readme. I'm thinking of a drawer full of dossiers, maybe showing git-related. I wonder if I should really make it with AI due to ethical concerns, even if most of the code here has been written by deepseek.
