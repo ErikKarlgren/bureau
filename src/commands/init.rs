@@ -23,8 +23,7 @@ const TUTORIAL_NAME: &str = "0000 - welcome to bureau";
 
 /// What the tutorial and editor prompts say.
 const TUTORIAL_HINT: &str = "(a dossier to teach you about bureau)";
-const EDITOR_HINT: &str = "(None is fine for VS Code, Obsidian, etc.)";
-const EDITOR_CONTEXT: &str = "Bureau can add an optional, repository-local .nvim.lua with automatic folds for Markdown notes. Choose None if you use another editor, or if you prefer to configure Neovim yourself.";
+const EDITOR_HINT: &str = "(optional; None is fine for VS Code, Obsidian, etc.)";
 const RECOMMENDED_HINT: &str = "(Git attributes, ignores, EditorConfig and local Git settings)";
 const IDENTITY_HINT: &str = "(used as the Git author)";
 const APPLY_HINT: &str = "(you can edit every generated file afterwards)";
@@ -112,6 +111,7 @@ impl InteractiveAnswers {
     fn ask_select(&self, label: &str, hint: &str, items: &[&str], default: usize) -> Result<usize> {
         let theme = BureauTheme::new(self.palette, label, hint);
         Select::with_theme(&theme)
+            .with_prompt("")
             .items(items)
             .default(default)
             .interact()
@@ -151,12 +151,8 @@ impl Answers for InteractiveAnswers {
     }
 
     fn editor(&mut self, default: Editor) -> Result<Editor> {
-        eprintln!("{}", self.palette.context().paint(EDITOR_CONTEXT));
-        eprintln!();
-
         let items: Vec<&str> = Editor::ALL.iter().map(|editor| editor.label()).collect();
-        let index =
-            self.ask_select("Editor configuration", EDITOR_HINT, &items, default.index())?;
+        let index = self.ask_select("Editor", EDITOR_HINT, &items, default.index())?;
 
         Ok(Editor::from_index(index))
     }
@@ -542,7 +538,7 @@ fn summary(plan: &Plan, cwd: &Path, palette: Palette) -> String {
     let _ = writeln!(
         output,
         "{}",
-        palette.context().paint("Git configuration to change:")
+        palette.heading().paint("Git configuration to change:")
     );
     if plan.config.is_empty() {
         let _ = writeln!(output, "  {}", palette.context().paint("(none)"));
@@ -795,8 +791,7 @@ mod tests {
     fn the_editor_choices_say_what_they_write() {
         assert!(Editor::None.label().contains("no editor-specific config"));
         assert!(Editor::Neovim.label().contains(".nvim.lua"));
-        assert!(EDITOR_CONTEXT.contains("None"));
-        assert!(EDITOR_CONTEXT.contains(".nvim.lua"));
+        assert!(EDITOR_HINT.contains("None"));
     }
 
     #[test]
