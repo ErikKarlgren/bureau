@@ -1,5 +1,9 @@
 # Tasks
 
+## version
+
+- [ ] `bureau version`: show version (git tag; otherwise git commit)
+
 ## new
 
 - [ ] `bureau new dossier`: after creating a new dossier, run `bureau worklog`, add the message "created dossier", and link this new dossier to today's entry. If the latter doesn't exist, simply create it then.
@@ -137,6 +141,11 @@
       - For the Neovim part, use a temporary `XDG_CONFIG_HOME/nvim/init.lua`
         with `vim.opt.exrc = true` and pre-trust `.nvim.lua`, so the trust
         prompt does not make the recording differ between runs.
+      - The same scripted demo should write `docs/sample-report.md` and a
+        filled `docs/sample-dossier.md` (a dossier after a week, not the empty
+        template) with pinned `GIT_AUTHOR_DATE`/`GIT_COMMITTER_DATE` and
+        `--date` backfills, so the README can show real artifacts and a CI
+        check can catch drift.
 - [ ] When the VHS/build pipeline exists, run `bureau doctor` (or the internal
       check it calls) against the generated welcome dossier and fail the job
       if that dossier reports any finding at all.
@@ -145,10 +154,21 @@
 - [ ] Consider git hooks later; they are deliberately out of scope for the
       first `bureau init`.
 
+## release
+
+- [ ] Tag → binaries: a `v*` tag builds `bureau` for Linux (x86_64) and Windows
+      (x86_64) and uploads `.tar.gz` / `.zip` plus `SHA256SUMS` to the GitHub
+      Release. The workflow so far only checks; this is the CD half.
+- [ ] Install script: once the release assets exist, add a `curl -fsSL … | sh`
+      installer and a PowerShell equivalent for Windows, both linked from the
+      README. They must pin a version, verify the checksum, install to a
+      user-writable directory, and never run as root.
+
 ## Miscellaneous
 
 - [ ] Rework the `README.md` to make it easier to understand to other people how `bureau` is meant to be used. Mention how the repo owner uses it with neovim+telescope, and how it should also work fine with vscode (ctrl-p toquickly switch between files, etc) and other code editors.
       - Mention too how the tool has been mostly vibecoded with Deepseek (because the implementation doesn't interest me thaaaat much in comparison to other personal projects, although it does a bit), but how at the same time it's meant for manual workflows
+      - Use the 0rwx framework (https://0rwx.com/) for the disclosure: code `AI:X` with the guardrails spelled out, README `AI:R` (prose written by the owner, review and fact-checking by AI). See `readme-skeleton.md`.
       - Make the small dependency footprint a selling point: five direct dependencies (anyhow, chrono, clap, dialoguer, sanitise-file-name) and 68 crates in `Cargo.lock`, so a cold `cargo build --release` takes seconds and `cargo install` is not a coffee break. The whole point is that a single self-contained binary drops into a notes repository without dragging a toolchain-sized dependency tree behind it.
       - The repo owner shall write the readme themselves and manually, so the LLM must simply help them brainstorm, structure the file and fix typos and wording issues
       - This tool should also work well enough with Obsidian, Joplin, ... right?
