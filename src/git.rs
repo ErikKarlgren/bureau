@@ -316,6 +316,23 @@ pub fn relative<'a>(root: &Path, path: &'a Path) -> &'a Path {
     path.strip_prefix(root).unwrap_or(path)
 }
 
+/// The name git gives `path`: relative to `root`, with `/` for every separator.
+///
+/// Git prints every path it reports this way on every platform, so a map keyed
+/// by anything else misses on Windows, where an OS path's separators are
+/// backslashes. This is the name to use both as a pathspec and as a lookup key.
+///
+/// # Errors
+///
+/// Fails when the relative path is not UTF-8, which git could not name either.
+pub fn relative_name(root: &Path, path: &Path) -> Result<String> {
+    let name = relative(root, path)
+        .to_str()
+        .with_context(|| format!("'{}' is not a UTF-8 path", path.display()))?;
+
+    Ok(name.replace(std::path::MAIN_SEPARATOR, "/"))
+}
+
 /// The commit `HEAD` points at, or `None` when the repository has no commits.
 ///
 /// An unborn `HEAD` is not an error: a fresh repository simply has no history.
@@ -409,6 +426,9 @@ pub fn is_dirty(root: &Path, path: &Path) -> Result<bool> {
 /// A path with no answer is absent from the map, not mapped to `None`; callers
 /// treat absence as "did not exist yet".
 ///
+/// The paths are git names, as [`relative_name`] produces them: `/` for every
+/// separator on every platform. The keys of the map are those same names.
+///
 /// # Errors
 ///
 /// Fails when `git` cannot be run, the history cannot be read, or a path git
@@ -419,7 +439,7 @@ pub fn last_commits<'p, I>(
     paths: I,
 ) -> Result<HashMap<String, String>>
 where
-    I: IntoIterator<Item = &'p Path>,
+    I: IntoIterator<Item = &'p str>,
 {
     let output = Command::new("git")
         .arg("--no-pager")
@@ -554,8 +574,9 @@ fn pinned_diff(root: &Path) -> Command {
 /// hash, so the caller never has to know it.
 ///
 /// Every path in `paths` is answered by a single invocation, and the bytes are
-/// split back apart by [`FILE_MARKER`]. The paths are used as the pathspec, so
-/// a path with no changes is simply absent from the map.
+/// split back apart by [`FILE_MARKER`]. The paths are git names, as
+/// [`relative_name`] produces them, and they are used as the pathspec; a path
+/// with no changes is simply absent from the map.
 ///
 /// `--follow` is deliberately not passed. It only ever affected a path that the
 /// base tree does not hold under the same name, and the report's base for a
@@ -577,9 +598,9 @@ pub fn diffs<'p, I>(
     color: bool,
 ) -> Result<HashMap<String, String>>
 where
-    I: IntoIterator<Item = &'p Path>,
+    I: IntoIterator<Item = &'p str>,
 {
-    let paths: Vec<&Path> = paths.into_iter().collect();
+    let paths: Vec<&str> = paths.into_iter().collect();
 
     let mut command = pinned_diff(root);
     command
@@ -608,8 +629,7 @@ where
     // Every path asked about gets an answer, so a caller can tell "no changes"
     // from "not asked" without consulting the input again.
     for path in paths {
-        let key = path.to_str().unwrap_or_default().to_owned();
-        diffs.entry(key).or_default();
+        diffs.entry(path.to_owned()).or_default();
     }
 
     Ok(diffs)
@@ -901,7 +921,7 @@ mod tests {
 
     /// The one path's diff, or empty text when the batch had none for it.
     fn diff_of(root: &Path, base: Option<&str>, head: &str, path: &str, color: bool) -> String {
-        diffs(root, base, head, [Path::new(path)], color)
+        diffs(root, base, head, [path], color)
             .unwrap()
             .remove(path)
             .unwrap_or_default()
@@ -978,12 +998,24 @@ mod tests {
 
         let scratch = repository("git-discover");
         let root = scratch.path().canonicalize().unwrap();
-        assert_eq!(discover(root.as_path()).unwrap(), Some(root.clone()));
+
+        // `git rev-parse` prints the path git's way, with `/` separators, while
+        // `canonicalize` on Windows answers with a `\\?\` verbatim path. Both
+        // name the same directory, so the two are compared in one spelling.
+        let canonical = |path: &Path| path.canonicalize().unwrap();
+        assert_eq!(
+            discover(root.as_path())
+                .unwrap()
+                .map(|path| canonical(&path)),
+            Some(root.clone())
+        );
 
         let subdirectory = root.join("sub");
         fs::create_dir_all(&subdirectory).unwrap();
         assert_eq!(
-            discover(subdirectory.as_path()).unwrap(),
+            discover(subdirectory.as_path())
+                .unwrap()
+                .map(|path| canonical(&path)),
             Some(root.clone())
         );
 
@@ -993,7 +1025,9 @@ mod tests {
             &["worktree", "add", "-q", "linked", "-b", "linked-branch"],
         );
         assert_eq!(
-            discover(worktree.as_path()).unwrap(),
+            discover(worktree.as_path())
+                .unwrap()
+                .map(|path| canonical(&path)),
             Some(worktree.canonicalize().unwrap())
         );
 
@@ -1092,18 +1126,11 @@ mod tests {
         git(root, &["add", "--", "with space.md", "kött.md"]);
         git(root, &["commit", "-qm", "two more"]);
 
-        let paths = [
-            Path::new("f.md"),
-            Path::new("other.md"),
-            Path::new("with space.md"),
-            Path::new("kött.md"),
-            Path::new("never.md"),
-        ];
+        let paths = ["f.md", "other.md", "with space.md", "kött.md", "never.md"];
 
         let walked = last_commits(root, date(2030, 1, 1), paths).unwrap();
 
         for path in paths {
-            let path = path.to_str().unwrap();
             assert_eq!(
                 walked.get(path).map(String::as_str),
                 rev_list(root, date(2030, 1, 1), path).as_deref(),
@@ -1127,16 +1154,10 @@ mod tests {
         scratch.write("second.md", "alpha\nBETA\n").unwrap();
         git(root, &["commit", "-qam", "both again"]);
 
-        let paths = [
-            Path::new("f.md"),
-            Path::new("second.md"),
-            Path::new("absent.md"),
-        ];
+        let paths = ["f.md", "second.md", "absent.md"];
         let batched = diffs(root, Some("HEAD~1"), "HEAD", paths, false).unwrap();
 
         for path in paths {
-            let path = path.to_str().unwrap();
-
             // `git diff` on this path alone, with the same pinned settings.
             let alone = Command::new("git")
                 .args(["-c", "diff.algorithm=histogram"])
@@ -1291,7 +1312,7 @@ mod tests {
         let root = scratch.path();
         fs::write(root.join("other.md"), "x\n").unwrap();
 
-        let diffs = diffs(root, Some("HEAD~1"), "HEAD", [Path::new("other.md")], false).unwrap();
+        let diffs = diffs(root, Some("HEAD~1"), "HEAD", ["other.md"], false).unwrap();
 
         assert_eq!(
             diffs.get("other.md").map(String::as_str),

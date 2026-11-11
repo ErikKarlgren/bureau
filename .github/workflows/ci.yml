@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  STYLUA_VERSION: "2.6.0"
+  ACTIONLINT_VERSION: "1.7.12"
+  NVIM_VERSION: "0.12.6"
+
+jobs:
+  ubuntu:
+    name: Ubuntu
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: just,typos,zizmor
+
+      # stylua and actionlint are not in install-action's manifest and are not
+      # crates, so they come straight from their pinned release archives.
+      - name: Install stylua and actionlint
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          curl -fsSLo "$RUNNER_TEMP/stylua.zip" \
+            "https://github.com/JohnnyMorganz/StyLua/releases/download/v${STYLUA_VERSION}/stylua-linux-x86_64.zip"
+          unzip -q "$RUNNER_TEMP/stylua.zip" -d "$bin"
+          curl -fsSLo "$RUNNER_TEMP/actionlint.tar.gz" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$bin" actionlint
+          echo "$bin" >> "$GITHUB_PATH"
+
+      # The two Neovim tests return early when `nvim` is missing, so they only
+      # verify the embedded `.nvim.lua` template when it is installed. Both
+      # jobs install the same pinned release, so the template is checked
+      # against one version and its Windows branch is exercised too.
+      - name: Install Neovim
+        run: |
+          set -euo pipefail
+          curl -fsSLo "$RUNNER_TEMP/nvim.tar.gz" \
+            "https://github.com/neovim/neovim/releases/download/v${NVIM_VERSION}/nvim-linux-x86_64.tar.gz"
+          tar -xzf "$RUNNER_TEMP/nvim.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      # A silent skip is the failure mode to guard against: if this step cannot
+      # see `nvim`, the two Neovim tests would pass without ever running it.
+      - name: Verify Neovim
+        run: nvim --version
+
+      - name: Check
+        run: just ci-full
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: just
+
+      - name: Install Neovim
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $zip = Join-Path $env:RUNNER_TEMP "nvim.zip"
+          Invoke-WebRequest -Uri "https://github.com/neovim/neovim/releases/download/v$env:NVIM_VERSION/nvim-win64.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP -Force
+          (Join-Path $env:RUNNER_TEMP "nvim-win64\bin") | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Verify Neovim
+        run: nvim --version
+
+      # `just ci` is the portable subset: the stylua, spelling and workflow
+      # checks need tools that are only installed on the Ubuntu job. The Neovim
+      # template tests do run here, since Neovim is installed above.
+      - name: Check
+        run: just ci

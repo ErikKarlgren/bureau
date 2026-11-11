@@ -817,7 +817,7 @@ mod tests {
 
     use super::*;
     use crate::commands::doctor;
-    use crate::commands::tests::Scratch;
+    use crate::commands::tests::{Scratch, absolute};
     use crate::style::Palette;
 
     /// A yes/no answer a test decides in advance.
@@ -949,15 +949,16 @@ mod tests {
 
     #[test]
     fn the_summary_names_the_files_and_config_changes() {
+        let root = absolute("notes");
         let plan = Plan {
-            root: PathBuf::from("/notes"),
+            root: root.clone(),
             needs_init: true,
             files: vec![PlannedFile {
-                path: PathBuf::from("/notes/.gitattributes"),
+                path: absolute("notes/.gitattributes"),
                 contents: String::new(),
                 explanation: Some("Because it matters.".to_owned()),
             }],
-            skipped: vec![PathBuf::from("/notes/.gitignore")],
+            skipped: vec![absolute("notes/.gitignore")],
             config: vec![ConfigChange {
                 key: "core.quotepath".to_owned(),
                 value: "false".to_owned(),
@@ -967,11 +968,11 @@ mod tests {
         };
 
         assert_eq!(
-            summary(&plan, Path::new("/notes"), Palette::OFF),
+            summary(&plan, &root, Palette::OFF),
             "Repository: '.'\nFiles to create:\n  '.gitattributes'\n    Because it matters.\nFiles left alone (already exist):\n  '.gitignore'\nGit configuration to change:\n  core.quotepath = false\nCommit to create: 'init: set up bureau' (1 file)\n"
         );
 
-        let coloured = summary(&plan, Path::new("/notes"), Palette::ON);
+        let coloured = summary(&plan, &root, Palette::ON);
         assert!(
             coloured.contains("\x1b[2mBecause it matters.\x1b[0m"),
             "the explanation should be dim"

@@ -374,7 +374,7 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
-    use crate::commands::tests::Scratch;
+    use crate::commands::tests::{Scratch, absolute};
 
     /// The directory the names in a test are read from: the scratch root, so a
     /// test sees the same `dossiers/x.md` a user at the root would.
@@ -391,10 +391,10 @@ mod tests {
 
     #[test]
     fn a_created_path_reads_from_where_the_user_stands() {
-        let root = Path::new("/home/user/notes");
+        let root = absolute("home/user/notes");
         let entry = root.join("entries/2026-09-20.md");
 
-        assert_eq!(shown_from(&entry, Some(root)), "entries/2026-09-20.md");
+        assert_eq!(shown_from(&entry, Some(&root)), "entries/2026-09-20.md");
 
         // From below the file, the line is just its name.
         assert_eq!(
@@ -416,7 +416,7 @@ mod tests {
         // A working directory outside the file's own tree still names it the
         // long way round rather than guessing.
         assert_eq!(
-            shown_from(&entry, Some(Path::new("/home/user/other"))),
+            shown_from(&entry, Some(&absolute("home/user/other"))),
             "../notes/entries/2026-09-20.md"
         );
     }
@@ -472,13 +472,13 @@ mod tests {
     fn a_path_the_working_directory_cannot_be_measured_against_keeps_its_own() {
         // No working directory at all, or one that is not absolute: there is no
         // common ground to walk from, so the line falls back to what it has.
-        let entry = Path::new("/home/user/notes/entries/2026-09-20.md");
+        let entry = absolute("home/user/notes/entries/2026-09-20.md");
 
-        assert_eq!(relative_to(entry, None), None);
-        assert_eq!(relative_to(entry, Some(Path::new("notes"))), None);
+        assert_eq!(relative_to(&entry, None), None);
+        assert_eq!(relative_to(&entry, Some(Path::new("notes"))), None);
         assert_eq!(
-            shown_from(entry, None),
-            "/home/user/notes/entries/2026-09-20.md"
+            shown_from(&entry, None),
+            entry.to_string_lossy().into_owned()
         );
     }
 
@@ -487,10 +487,10 @@ mod tests {
         // `bureau new` names a file the same way on Windows, so the line a
         // person copies out of it means the same thing in git and in a link.
         // Walking up is a `..` step with the same separator as any other.
-        let root = Path::new("/home/user/notes");
+        let root = absolute("home/user/notes");
 
         assert_eq!(
-            relative_to(&root.join("entries/2026-09-20.md"), Some(root)),
+            relative_to(&root.join("entries/2026-09-20.md"), Some(&root)),
             Some("entries/2026-09-20.md".to_owned())
         );
         assert_eq!(

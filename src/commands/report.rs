@@ -266,13 +266,13 @@ fn batch_diffs(
     // dossier, which is where a `git mktree` per dossier used to come from.
     let empty = git::empty_tree(root)?;
 
-    // Git names paths relative to the root, whatever the pathspec looked like,
-    // so every lookup has to use that form.
-    let paths: Vec<&Path> = requests
+    // Git names paths relative to the root with `/` separators, on every
+    // platform, so that is the form both the pathspecs and the lookups use.
+    let names: Vec<String> = requests
         .iter()
-        .map(|request| git::relative(root, &request.path))
-        .collect();
-    let bases = git::last_commits(root, first.from, paths.iter().copied())?;
+        .map(|request| git::relative_name(root, &request.path))
+        .collect::<Result<_>>()?;
+    let bases = git::last_commits(root, first.from, names.iter().map(String::as_str))?;
 
     // A period that ends in the past stops at the newest commit on or before
     // its last day; a period that runs up to today stops at `HEAD`.
@@ -281,7 +281,11 @@ fn batch_diffs(
             .to
             .succ_opt()
             .context("the period ends at the last date this tool can represent")?;
-        Some(git::last_commits(root, after, paths.iter().copied())?)
+        Some(git::last_commits(
+            root,
+            after,
+            names.iter().map(String::as_str),
+        )?)
     } else {
         None
     };
@@ -289,20 +293,16 @@ fn batch_diffs(
     // The pair each path is compared under, and the paths that share one, so
     // that a single diff call answers every dossier with the same pair. An
     // empty head means the period ended before the dossier existed.
-    let mut pairs: HashMap<&Path, (String, String)> = HashMap::new();
-    let mut groups: HashMap<(String, String), Vec<&Path>> = HashMap::new();
+    let mut pairs: HashMap<&str, (String, String)> = HashMap::new();
+    let mut groups: HashMap<(String, String), Vec<&str>> = HashMap::new();
 
-    for path in &paths {
-        let key = path
-            .to_str()
-            .with_context(|| format!("'{}' is not a UTF-8 path", path.display()))?;
-
-        let base = bases.get(key).cloned().unwrap_or_else(|| empty.clone());
+    for name in &names {
+        let base = bases.get(name).cloned().unwrap_or_else(|| empty.clone());
 
         let head = if let Some(heads) = &heads {
-            let Some(head) = heads.get(key) else {
+            let Some(head) = heads.get(name) else {
                 // The period ended before this dossier existed at all.
-                pairs.insert(path, (base, String::new()));
+                pairs.insert(name.as_str(), (base, String::new()));
                 continue;
             };
             head.clone()
@@ -313,29 +313,25 @@ fn batch_diffs(
         groups
             .entry((base.clone(), head.clone()))
             .or_default()
-            .push(path);
-        pairs.insert(path, (base, head));
+            .push(name.as_str());
+        pairs.insert(name.as_str(), (base, head));
     }
 
-    let mut diffs: HashMap<&Path, Result<String>> = HashMap::new();
+    let mut diffs: HashMap<&str, Result<String>> = HashMap::new();
     for ((base, head), paths) in &groups {
         // A failed call is one answer for every path that shared its pair.
         match git::diffs(root, Some(base), head, paths.iter().copied(), first.color) {
             Ok(all) => {
-                for path in paths {
+                for name in paths {
                     // `all` is keyed the way git named the path, which is the
-                    // relative path this report collected, not the absolute
-                    // one the request carries.
-                    let key = path
-                        .to_str()
-                        .with_context(|| format!("'{}' is not a UTF-8 path", path.display()))?;
-                    diffs.insert(path, Ok(all.get(key).cloned().unwrap_or_default()));
+                    // same name this report collected.
+                    diffs.insert(name, Ok(all.get(*name).cloned().unwrap_or_default()));
                 }
             }
             Err(error) => {
                 let message = format!("{error:#}");
-                for path in paths {
-                    diffs.insert(path, Err(anyhow::Error::msg(message.clone())));
+                for name in paths {
+                    diffs.insert(name, Err(anyhow::Error::msg(message.clone())));
                 }
             }
         }
@@ -343,10 +339,10 @@ fn batch_diffs(
 
     Ok(requests
         .iter()
-        .zip(&paths)
-        .map(|(_, path)| {
-            let path = *path;
-            let Some((_, head)) = pairs.get(path) else {
+        .zip(&names)
+        .map(|(_, name)| {
+            let name = name.as_str();
+            let Some((_, head)) = pairs.get(name) else {
                 return Ok(String::new());
             };
 
@@ -355,7 +351,7 @@ fn batch_diffs(
                 return Ok(String::new());
             }
 
-            diffs.remove(path).unwrap_or_else(|| Ok(String::new()))
+            diffs.remove(name).unwrap_or_else(|| Ok(String::new()))
         })
         .collect())
 }
@@ -464,14 +460,16 @@ mod tests {
 
         // The report's period ends in the past, so the head is a commit rather
         // than `HEAD` and both walks are exercised.
-        // Absolute paths, because that is what `sources::read_markdown` hands
-        // the report: git answers with paths relative to the root either way,
-        // which is the mismatch this test exists to catch.
+        //
+        // The paths are built the way `sources::read_markdown` builds them --
+        // one component per `join`, so the OS separator appears on Windows --
+        // because that OS path against git's `/`-separated name is the
+        // mismatch this test exists to catch.
         let names = ["dossiers/A.md", "dossiers/B.md"];
-        let requests: Vec<DiffRequest> = names
+        let requests: Vec<DiffRequest> = ["A.md", "B.md"]
             .iter()
-            .map(|path| DiffRequest {
-                path: root.join(path),
+            .map(|file| DiffRequest {
+                path: root.join("dossiers").join(file),
                 from: date(2026, 9, 15),
                 to: date(2026, 9, 25),
                 today: date(2026, 12, 31),
@@ -483,19 +481,19 @@ mod tests {
         assert_eq!(diffs.len(), 2);
 
         for ((name, request), diff) in names.iter().zip(&requests).zip(diffs) {
+            let name = *name;
             let diff = diff.unwrap();
 
             // The same base and head the batch should have chosen, asked for
             // one dossier at a time.
-            let path = git::relative(root, &request.path);
-            let base = git::last_commits(root, request.from, [path])
+            let base = git::last_commits(root, request.from, [name])
                 .unwrap()
-                .get(*name)
+                .get(name)
                 .cloned()
                 .unwrap();
-            let head = git::last_commits(root, date(2026, 9, 26), [path])
+            let head = git::last_commits(root, date(2026, 9, 26), [name])
                 .unwrap()
-                .get(*name)
+                .get(name)
                 .cloned()
                 .unwrap();
 

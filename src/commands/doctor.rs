@@ -105,10 +105,7 @@ fn render(findings: &[doctor::Finding], root: &Path, palette: Palette) -> String
             doctor::Severity::Warning => warnings = warnings.saturating_add(1),
         }
 
-        let path = sources::relative(&finding.path, root);
-        let path = path
-            .to_string_lossy()
-            .replace(std::path::MAIN_SEPARATOR, "/");
+        let path = sources::relative_text(&finding.path, root);
         let location = format!("{path}:{}:", finding.line);
         let severity = match finding.severity {
             doctor::Severity::Error => palette.error(),
