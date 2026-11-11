@@ -1,152 +1,29 @@
 # bureau
-Git-based Work Dossiers for Legacy Systems
+![CI Badge](https://github.com/ErikKarlgren/bureau/actions/workflows/ci.yml/badge.svg)
+
+bureau keeps a traceable record of long investigations as plain Markdown in your git repository: one dossier per task or investigation, one entry per day, and a report that reconstructs any period from your notes and the commits.
+
+- **Tracing, not just notes:** bureau commits every file it writes. `bureau report` then prints a markdown document describing your work for the chosen time period.
+- **Your writing stays yours:** bureau creates the scaffolding, links files together and makes the git commits. It never writes your notes, because deciding what's important enough to write down is up to you.
+- **Built for investigation work:** Create a dossier for each long debugging session, incident or non-trivial ticket (e.g. legacy systems, migrations, low-level software). <!-- REVIEW WORDING HERE -->
+- **No lock-in:** Even if you uninstall bureau, you will still be able to read your notes.
+- **One source of truth:** Your notes and the Git history. No database, no sync service.
+- **Small, fast and local:** 2.2 MB binary. No network, no account, no telemetry.
 
 ## Requirements
+- `rustup` (only for installation and updates)
 - `git`
-- Linux or Windows
+- Linux or Windows (macOS should work, but not tested in CI)
 
 ## Installation
-```bash
-cargo install --locked --path .
-```
-
-## Usage
-Run it from inside the git repository where you keep your notes:
-
-```bash
-bureau init
-bureau new dossier Some dossier name
-bureau new entry
-bureau worklog refactor
-bureau tasks
-bureau tasks --all
-bureau report
-bureau report --from "a week ago"
-bureau doctor
-```
-
-`bureau init` sets up a repository in the current directory, or uses the
-repository already there. It checks the author name and email, asking only
-when they are missing, offers a Neovim `.nvim.lua` with automatic folds when
-one is not already present, optionally creates
-`dossiers/0000 - welcome to bureau.md` as a tutorial, and writes
-`.gitattributes`, `.gitignore` and `.editorconfig`. It applies a few
-repository-local Git settings with `git config --local` (not a root
-`.gitconfig`, which Git would ignore) and commits only the files it created.
-Re-running it is safe: existing files are left alone, and it only prompts for
-pieces that are still missing. The exact rules live in
-[`docs/subcommands/init.md`](docs/subcommands/init.md).
-
-Dossiers are written to `dossiers/<name>.md` and daily entries to
-`entries/<YYYY-MM-DD>.md`, both at the root of that repository, and both are
-committed.
-
-`bureau worklog [<filter>] [--date <date>] [--menu]` appends one line to a
-dossier's `## Worklog` section and links that dossier from the same day's entry.
-A filter matching several dossiers opens a picker; with no filter the most
-recently modified dossier wins, or the picker opens when several share the
-newest timestamp. `--menu` asks the picker over every dossier instead, and
-cannot be combined with a filter. `--date` logs against another day instead of
-today, which is how you backfill; it takes a plain date or plain English
-(`yesterday`, `a week ago`, `3 months ago`), sharing the grammar `bureau report`
-uses.
-
-## Workflow
-Keep a git repository for your notes and run bureau from a terminal inside it.
-Your editor's integrated terminal is the intended place, since switching between
-markdown files is something editors are already good at.
-
-A dossier is one file per task. `bureau new dossier` asks for a description and
-an optional link, then commits the file. A daily entry is one file per day,
-created with `bureau new entry`.
-
-While you work, `bureau worklog` records a line against a dossier. The line goes
-under that day's heading in the dossier's `## Worklog` section, and the dossier
-is linked from that day's entry, which is created if it does not exist yet. If
-the entry already has uncommitted changes, they are committed first as
-`update entry: <date>`; an entry that has to be created is committed as
-`new entry: <date>` on its own, and the link follows in the worklog commit. The
-dossier's new line and the entry's link are then committed together as
-`worklog: <dossier>`. Before asking for the line, `bureau worklog` previews the
-dossier's uncommitted changes, or warns when there are none, and after the
-commits it prints a compact summary of the ones it made. The two files link to
-each other, so a dossier shows which days were spent on it and an entry shows
-which dossiers that day touched.
-
-All commits are titled `<action>: <file stem>`, for example
-`new dossier: 1234 - foo`, `new entry: 2026-10-17`, `update entry: 2026-10-17`
-and `worklog: 1234 - foo`.
-
-New files start from [`templates/dossier.md`](templates/dossier.md) and
-[`templates/daily-entry.md`](templates/daily-entry.md). Those templates are
-embedded in the binary at build time, so changing them takes effect after a
-reinstall.
-
-Tasks are generally added to a dossier, although they could be added to a daily
-entry if they don't really belong to an existing dossier. They follow this
-custom format:
-```markdown
-- Just some text
-- [ ] todo task, not started yet
-- [.] work in progress
-- [o] presumably almost finished
-- [x] done
-- [-] won't do, cancelled
-- [?] on wait
-```
-
-Tasks can be put inside other tasks in a hierarchical fashion, like this:
-```markdown
-- [.] Refactor billing system
-    - [x] Check what files to refactor
-        - Files: billing.rs, billing.html
-    - Follow the guidelines doc Tom shared with you
-    - [?] Decide whether to rewrite the `find_client()` function
-        - Waiting for John for feedback
-    - [.] Add more checks
-```
-`bureau tasks` lists those tasks as a tree, grouped into `ACTIONABLE`, `BLOCKED`
-and — with `--all`, for dossiers only — `FINISHED`. A task is shown together
-with the parents that lead to it, so it is clear where it sits even when only
-one branch of a dossier is printed, and only what is still outstanding is
-printed: ticking a task off takes it out of the listing rather than leaving it
-there as context. Headings inside a note (`## Pending`, `### before the trip`)
-are printed as context for the tasks under them, but only in the sections where
-those tasks print; a template heading that adds no distinction — `## Pending`
-in `ACTIONABLE`/`BLOCKED`, `## Completed` in `FINISHED`, `## Notes` in an
-entry — is left out when it is the only group. `BLOCKED` lists the `[?]` tasks
-themselves — what you are waiting on — and the work a wait is holding up stays
-out of the listing until `--all` asks for it. Output is coloured when it goes
-to a terminal — blue for what can be picked up, cyan once it has been started,
-magenta for what is waiting on somebody, green for what is over, and dim for
-the lines that are only there to give context — and plain text when it is piped
-or `NO_COLOR` is set. Tasks in a daily entry are listed under their date,
-oldest first, before the dossiers, which follow most recently modified first.
-`--filter [<pattern>]`
-narrows the listing to one dossier the same way `bureau worklog` picks one,
-`--menu` opens the picker over all of them instead, and sealed dossiers are
-never listed, not even with `--all`. The exact rules, output format and
-examples live in [`docs/subcommands/tasks.md`](docs/subcommands/tasks.md).
-
-`bureau report [<date>] [--from <date>] [--to <date>] [--no-diff] [--filter <pattern>] [--menu]`
-prints the work in a period: each day's entry notes and the dossier worklogs
-logged that day, oldest first, followed by the `git diff` of each dossier the
-period touched. `<date>` is one day in plain English or `YYYY-MM-DD`; `--from`
-and `--to` are an inclusive range with `--to` defaulting to today, and
-`--filter` narrows the report to one dossier. The report never writes anything,
-prints plain text on stdout, and is meant to be piped into a file or an LLM —
-`--no-diff` leaves it as the daily work alone, and warnings go to stderr.
-Sealed dossiers are still included: a seal hides a dossier from `tasks`, not
-from history. The exact rules live in
-[`docs/subcommands/report.md`](docs/subcommands/report.md).
-
-`bureau doctor` checks the notes for formatting problems: broken relative links,
-non-portable file names, a missing or malformed `## Worklog`, worklog day
-headings that do not link to their entry, empty tasks, task markers
-`bureau tasks` cannot see, line endings, and dossier/entry links that disagree.
-It is read-only, prints one `path:line: Severity: message` finding per line on
-stdout, and exits 1 only when it finds an error. Warnings do not fail the run.
-The exact rules live in [`docs/subcommands/doctor.md`](docs/subcommands/doctor.md).
+1. Install `rustup`, either [as the official docs say](https://rust-lang.org/tools/install/) or with your package manager.
+2. Run the following command in a terminal:
+    ```bash
+    cargo install --locked --git https://github.com/ErikKarlgren/bureau
+    ```
+After a version bump, repeat step 2 every time you want to update bureau.
 
 ## License
 MIT. See [LICENSE](LICENSE).
+
+<!-- TODO: REVIEW LAST DEEPSEEK'S FEEDBACK. You've done quite better with the intro this time, but there are still some grammar and styling issues -->
